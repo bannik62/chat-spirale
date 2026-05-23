@@ -15,6 +15,7 @@
   let isAdmin = $state(!!getAdminToken());
   let showInvite = $state(false);
   let pickList = $state([]);
+  let invitePicker = $state(null);
   let allParticipants = $state([]);
   let inviteFeedback = $state('');
   let members = $state([]);
@@ -43,6 +44,13 @@
   let canSendMessage = $derived.by(() => {
     tick;
     return messageField.isValid;
+  });
+
+  let canAddParticipants = $derived.by(() => {
+    tick;
+    pickList;
+    const pending = invitePicker?.getPendingEmail?.() ?? null;
+    return pickList.length > 0 || !!pending;
   });
 
   function getRoomId() {
@@ -119,6 +127,12 @@
 
   async function addParticipants() {
     inviteFeedback = '';
+    logAction('RoomChat', 'addParticipants click', {
+      pickListLen: pickList.length,
+      pendingEmail: invitePicker?.getPendingEmail?.() ?? null,
+    });
+
+    invitePicker?.flushPendingEmail?.();
 
     inviteForm.emails.clear();
     for (const email of pickList) {
@@ -292,17 +306,19 @@
           Choisissez dans la liste ou tapez un nouvel email. Même code si déjà inscrit.
         </p>
         <ParticipantPicker
+          bind:this={invitePicker}
           {allParticipants}
           bind:pickList
           roomMemberEmails={members.map((m) => m.email)}
+          onSelectionChange={refreshUi}
         />
         <button
           type="button"
           class="invite-submit"
           onclick={addParticipants}
-          disabled={pickList.length === 0}
+          disabled={!canAddParticipants}
         >
-          Mettre à jour les accès ({pickList.length})
+          Mettre à jour les accès ({pickList.length}{invitePicker?.getPendingEmail?.() ? '+1' : ''})
         </button>
         {#if inviteFeedback}
           <pre class="invite-result">{inviteFeedback}</pre>

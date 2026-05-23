@@ -18,6 +18,7 @@
   let joinForm = $state(new JoinChatForm());
   let pickList = $state([]);
   let tick = $state(0);
+  let participantPicker = $state(null);
 
   let chats = $state([]);
   let participants = $state([]);
@@ -31,7 +32,14 @@
     tick;
     pickList;
     participantForm.roomIds.ids;
-    return pickList.length > 0 && participantForm.roomIds.isValid;
+    const pending = participantPicker?.getPendingEmail?.() ?? null;
+    const hasEmails = pickList.length > 0 || !!pending;
+    return hasEmails && participantForm.roomIds.isValid;
+  });
+
+  let canCreateChat = $derived.by(() => {
+    tick;
+    return chatForm.name.isValid;
   });
 
   async function refresh() {
@@ -40,6 +48,32 @@
     participants = await adminFetch('/participants');
     logAction('Admin', 'refresh done', { chats: chats.length, participants: participants.length });
     participantForm.roomIds.setDefault(chats.map((c) => c.id));
+    participantForm = touchForm(participantForm);
+    refreshUi();
+  }
+
+  async function handleCreateParticipantClick() {
+    logAction('Admin', 'createParticipant click', {
+      pickListLen: pickList.length,
+      pendingEmail: participantPicker?.getPendingEmail?.() ?? null,
+      roomIds: participantForm.roomIds.ids,
+      canSubmit: canCreateParticipant,
+      loading,
+    });
+    await createParticipant();
+  }
+
+  async function handleCreateChatClick() {
+    logAction('Admin', 'createChat click', {
+      name: chatForm.name.value,
+      canSubmit: canCreateChat,
+      loading,
+    });
+    await createChat();
+  }
+
+  function onInviteMailChange(e) {
+    participantForm.sendInviteEmail.checked = e.currentTarget.checked;
     participantForm = touchForm(participantForm);
     refreshUi();
   }
@@ -78,6 +112,8 @@
     error = '';
     success = '';
     lastCreatedCode = '';
+
+    participantPicker?.flushPendingEmail?.();
 
     participantForm.emails.clear();
     for (const email of pickList) {
@@ -280,13 +316,27 @@
         <h2>Nouveau salon</h2>
         <label>
           Nom de l'activité
-          <input bind:value={chatForm.name.value} placeholder="Atelier janvier" />
+          <input
+            bind:value={chatForm.name.value}
+            placeholder="Atelier janvier"
+            oninput={refreshUi}
+          />
         </label>
         <label class="row">
-          <input type="checkbox" bind:checked={chatForm.isPermanent.checked} />
+          <input
+            type="checkbox"
+            checked={chatForm.isPermanent.checked}
+            onchange={(e) => {
+              chatForm.isPermanent.checked = e.currentTarget.checked;
+              chatForm = touchForm(chatForm);
+              refreshUi();
+            }}
+          />
           Permanent (pas de suppression auto vendredi)
         </label>
-        <button onclick={createChat} disabled={loading || !chatForm.canSubmit}>Créer le salon</button>
+        <button onclick={handleCreateChatClick} disabled={loading || !canCreateChat}>
+          Créer le salon
+        </button>
       </section>
 
       <section class="card">
@@ -322,9 +372,18 @@
           Cochez les salons à ajouter. Personne déjà inscrite : <strong>même code</strong>,
           pas d'email automatique (utilisez « Renvoyer mail » dans la liste si besoin).
         </p>
-        <ParticipantPicker allParticipants={participants} bind:pickList />
+        <ParticipantPicker
+          bind:this={participantPicker}
+          allParticipants={participants}
+          bind:pickList
+          onSelectionChange={refreshUi}
+        />
         <label class="row invite-mail-row">
-          <input type="checkbox" bind:checked={participantForm.sendInviteEmail.checked} />
+          <input
+            type="checkbox"
+            checked={participantForm.sendInviteEmail.checked}
+            onchange={onInviteMailChange}
+          />
           Envoyer l'email avec le code (nouvelle personne uniquement par défaut)
         </label>
         <fieldset>
@@ -340,9 +399,18 @@
             </label>
           {/each}
         </fieldset>
-        <button onclick={createParticipant} disabled={loading || !canCreateParticipant}>
+        <button onclick={handleCreateParticipantClick} disabled={loading || !canCreateParticipant}>
           {loading ? 'Enregistrement…' : "Enregistrer l'accès"}
         </button>
+        {#if !canCreateParticipant && !loading}
+          <p class="form-hint muted">
+            {#if pickList.length === 0 && !participantPicker?.getPendingEmail?.()}
+              Saisissez un email (puis Entrée ou ce bouton).
+            {:else if !participantForm.roomIds.isValid}
+              Cochez au moins un salon.
+            {/if}
+          </p>
+        {/if}
         {#if lastCreatedCode}
           <p class="code-display">Code : <strong>{lastCreatedCode}</strong></p>
         {/if}
@@ -573,6 +641,11 @@
     font-size: 0.85rem;
     display: block;
     margin-top: 0.2rem;
+  }
+
+  .form-hint {
+    margin-top: 0.5rem;
+    text-align: center;
   }
 
   .center {

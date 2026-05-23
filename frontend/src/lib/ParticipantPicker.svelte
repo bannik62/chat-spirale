@@ -14,6 +14,7 @@
     allParticipants = [],
     pickList = $bindable([]),
     roomMemberEmails = [],
+    onSelectionChange = () => {},
   } = $props();
 
   let searchField = $state(new ParticipantSearchField());
@@ -24,6 +25,40 @@
   function syncOut() {
     pickList = emailList.toJSON();
     emailList = touchForm(emailList);
+    onSelectionChange();
+  }
+
+  function notifyInput() {
+    onSelectionChange();
+  }
+
+  /** Email en cours de saisie (pas encore en puce). */
+  export function getPendingEmail() {
+    return searchField.candidateEmail;
+  }
+
+  /** Ajoute l'email tapé dans le champ s'il est valide. */
+  export function flushPendingEmail() {
+    const candidate = searchField.candidateEmail;
+    if (!candidate) return false;
+    if (emailList.includes(candidate)) {
+      searchField.reset();
+      searchField = touchForm(searchField);
+      syncOut();
+      return true;
+    }
+    if (emailList.add(candidate)) {
+      logAction('ParticipantPicker', 'flushPendingEmail', { email: candidate });
+      searchField.reset();
+      searchField = touchForm(searchField);
+      syncOut();
+      return true;
+    }
+    return false;
+  }
+
+  export function hasSelection() {
+    return emailList.length > 0 || !!searchField.candidateEmail;
   }
 
   $effect(() => {
@@ -82,6 +117,7 @@
   function onInputBlur() {
     setTimeout(() => {
       dropdownOpen = false;
+      if (searchField.candidateEmail) flushPendingEmail();
     }, 200);
   }
 
@@ -114,6 +150,7 @@
       onfocus={onInputFocus}
       onblur={onInputBlur}
       onkeydown={onKeydown}
+      oninput={notifyInput}
     />
   </label>
 
@@ -155,8 +192,12 @@
         </span>
       {/each}
     </div>
+  {:else if searchField.candidateEmail}
+    <p class="hint pending">
+      Email saisi : appuyez sur <strong>Entrée</strong> ou cliquez « Enregistrer l'accès » pour confirmer.
+    </p>
   {:else}
-    <p class="hint">Choisissez dans la liste ou tapez un nouvel email puis Entrée.</p>
+    <p class="hint">Choisissez dans la liste ou tapez un email puis Entrée.</p>
   {/if}
 </div>
 
@@ -282,6 +323,10 @@
 
   .chip-remove:hover {
     color: var(--danger);
+  }
+
+  .hint.pending {
+    color: var(--accent-hover);
   }
 
   .hint {
