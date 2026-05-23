@@ -14,24 +14,33 @@ model ChatRoom {
   expiresAt DateTime?
   isActive  Boolean   @default(true)
 
-  tokens   AccessToken[]
-  messages Message[]
+  memberships RoomMembership[]
+  messages    Message[]
 }
 
-model AccessToken {
+model Participant {
   id          String   @id @default(cuid())
-  token       String   @unique
-  email       String
-  displayName String?
+  email       String   @unique
+  accessCode  String   @unique
+  isRevoked   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  lastLoginAt DateTime?
 
-  chatRoomId String
-  chatRoom   ChatRoom @relation(fields: [chatRoomId], references: [id], onDelete: Cascade)
+  memberships RoomMembership[]
+}
 
-  createdAt  DateTime  @default(now())
-  lastUsedAt DateTime?
-  isRevoked  Boolean   @default(false)
+model RoomMembership {
+  id            String   @id @default(cuid())
+  participantId String
+  chatRoomId    String
+  displayName   String?
 
-  @@unique([email, chatRoomId])
+  participant Participant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  chatRoom    ChatRoom    @relation(fields: [chatRoomId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([participantId, chatRoomId])
 }
 
 model Message {

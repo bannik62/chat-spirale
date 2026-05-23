@@ -1,33 +1,73 @@
 import { Server } from 'socket.io';
-import { resolveAccessToken } from '../middleware/tokenAuth.js';
+import jwt from 'jsonwebtoken';
+import cookie from 'cookie';
 import { prisma } from '../utils/prisma.js';
+import { SESSION_COOKIE } from '../middleware/participantAuth.js';
+import { getAllowedOrigins } from '../middleware/security.js';
 
 export function attachSocket(httpServer) {
   const io = new Server(httpServer, {
     cors: {
-      origin: process.env.FRONTEND_URL || true,
+      origin: (origin, callback) => {
+        if (!origin) {
+          callback(null, true);
+          return;
+        }
+        const allowed = getAllowedOrigins();
+        if (allowed.includes(origin.replace(/\/$/, ''))) {
+          callback(null, true);
+          return;
+        }
+        callback(new Error('CORS Socket.IO refusé'));
+      },
       credentials: true,
     },
   });
 
   io.use(async (socket, next) => {
-    const token = socket.handshake.auth?.token;
-    const result = await resolveAccessToken(token);
-    if (!result?.accessToken) {
-      return next(new Error('Authentication error'));
-    }
-    if (result.error) {
-      return next(new Error(result.error));
-    }
-    if (!result.accessToken.displayName) {
-      return next(new Error('Display name not set'));
-    }
+    try {
+      const roomId = socket.handshake.auth?.roomId;
+      if (!roomId) return next(new Error('roomId required'));
 
-    socket.accessToken = result.accessToken;
-    socket.userName = result.accessToken.displayName;
-    socket.userEmail = result.accessToken.email;
-    socket.chatRoomId = result.accessToken.chatRoomId;
-    next();
+      let sessionToken = socket.handshake.auth?.sessionToken;
+      if (!sessionToken && socket.handshake.headers.cookie) {
+        const parsed = cookie.parse(socket.handshake.headers.cookie);
+        sessionToken = parsed[SESSION_COOKIE];
+      }
+
+      if (!sessionToken) return next(new Error('Authentication error'));
+
+      const payload = jwt.verify(sessionToken, process.env.JWT_SECRET);
+      if (payload.role !== 'participant') return next(new Error('Authentication error'));
+
+      const membership = await prisma.roomMembership.findUnique({
+        where: {
+          participantId_chatRoomId: {
+            participantId: payload.sub,
+            chatRoomId: roomId,
+          },
+        },
+        include: { chatRoom: true },
+      });
+
+      if (!membership?.displayName) {
+        return next(new Error('Display name not set'));
+      }
+
+      const room = membership.chatRoom;
+      if (!room.isActive) return next(new Error('disabled'));
+      if (room.expiresAt && room.expiresAt < new Date()) {
+        return next(new Error('expired'));
+      }
+
+      socket.userName = membership.displayName;
+      socket.userEmail = payload.email;
+      socket.chatRoomId = roomId;
+      socket.participantId = payload.sub;
+      next();
+    } catch {
+      next(new Error('Authentication error'));
+    }
   });
 
   io.on('connection', (socket) => {

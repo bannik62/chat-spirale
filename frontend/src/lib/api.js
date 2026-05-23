@@ -17,7 +17,11 @@ export async function adminFetch(path, options = {}) {
   const token = getAdminToken();
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(`${API}/admin${path}`, { ...options, headers });
+  const res = await fetch(`${API}/admin${path}`, {
+    credentials: 'include',
+    ...options,
+    headers,
+  });
   if (res.status === 401) {
     setAdminToken(null);
     throw new Error('Session expirée');
@@ -27,16 +31,28 @@ export async function adminFetch(path, options = {}) {
   return data;
 }
 
-export async function chatFetch(path, { token, ...options } = {}) {
-  const url = new URL(`${API}/chat${path}`, window.location.origin);
-  if (token) url.searchParams.set('token', token);
-
-  const res = await fetch(url, {
+export async function authFetch(path, options = {}) {
+  const token = getAdminToken();
+  const res = await fetch(`${API}/auth${path}`, {
     credentials: 'include',
     ...options,
     headers: {
       'Content-Type': 'application/json',
-      ...(token ? { 'x-chat-token': token } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options.headers || {}),
+    },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+export async function roomFetch(roomId, path, options = {}) {
+  const res = await fetch(`${API}/rooms/${roomId}${path}`, {
+    credentials: 'include',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
       ...(options.headers || {}),
     },
   });

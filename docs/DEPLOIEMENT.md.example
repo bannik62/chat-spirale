@@ -1,0 +1,58 @@
+# Notes de déploiement — serveur (NE PAS COMMITER)
+
+Copier ce fichier vers `docs/DEPLOIEMENT.md` (ignoré par Git) et remplir les valeurs réelles.
+
+```bash
+cp docs/DEPLOIEMENT.md.example docs/DEPLOIEMENT.md
+```
+
+---
+
+## Serveur
+
+| Élément | Valeur |
+|---------|--------|
+| Hôte SSH | |
+| Utilisateur | |
+| Chemin dépôt | `/opt/association-spirale` |
+| Domaine public | `https://spirale-beau-marais.vitalinfo.site` |
+
+## Apache
+
+| Élément | Valeur |
+|---------|--------|
+| Fichier vhost actif | `/etc/apache2/sites-available/spirale.conf` |
+| Copie locale (gitignored) | `deploy/apache-spirale.conf` |
+| Port proxy local | `127.0.0.1:8080` |
+| Certificat SSL | `/etc/letsencrypt/live/spirale-beau-marais.vitalinfo.site/` |
+
+## Docker prod
+
+| Variable | Notes |
+|----------|-------|
+| `SPIRALE_HTTP_PORT` | 8080 |
+| `FRONTEND_URL` | URL HTTPS publique |
+| `JWT_SECRET` | généré le : |
+| `DATABASE_URL` | |
+
+## Comptes
+
+| Rôle | Email | Notes |
+|------|-------|-------|
+| Admin prod | | mot de passe initial changé le : |
+| Gmail SMTP | | mot de passe application |
+
+## Commandes utiles
+
+```bash
+cd /opt/association-spirale
+docker compose -f docker-compose.prod.yml ps
+docker compose -f docker-compose.prod.yml logs -f backend
+sudo systemctl status apache2
+```
+
+## Historique
+
+| Date | Action |
+|------|--------|
+| | Premier déploiement |

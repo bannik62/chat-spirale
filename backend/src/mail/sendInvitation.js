@@ -16,25 +16,32 @@ function getTransporter() {
   return transporter;
 }
 
-export async function sendInvitationEmail({ to, chatName, inviteUrl }) {
+export async function sendInvitationEmail({ to, accessCode, siteUrl }) {
   const from = process.env.SMTP_USER;
+  const url = siteUrl || process.env.FRONTEND_URL || 'http://localhost:8081';
+
   if (!from || !process.env.SMTP_PASS) {
     console.warn('[mail] SMTP non configuré — invitation non envoyée à', to);
-    console.warn('[mail] Lien :', inviteUrl);
+    console.warn('[mail] Site :', url);
+    console.warn('[mail] Code :', accessCode);
     return { skipped: true };
   }
 
   await getTransporter().sendMail({
     from: `"Association Spirale" <${from}>`,
     to,
-    subject: `Invitation au chat « ${chatName} »`,
+    subject: 'Votre accès — Association Spirale',
     html: `
       <h2>Association Spirale</h2>
-      <p>Vous êtes invité(e) au chat <strong>${chatName}</strong>.</p>
-      <p><a href="${inviteUrl}">Rejoindre le chat</a></p>
-      <p><small>Ce lien est personnel. Ne le partagez pas.</small></p>
+      <p>Votre code personnel : <strong style="font-size:1.25em;letter-spacing:2px">${accessCode}</strong></p>
+      <ol>
+        <li>Allez sur <a href="${url}">${url}</a></li>
+        <li>Entrez votre email et ce code</li>
+        <li>Choisissez votre activité</li>
+      </ol>
+      <p><small>Ce code est personnel. En cas de perte, contactez l'association.</small></p>
     `,
-    text: `Invitation au chat "${chatName}". Lien : ${inviteUrl}`,
+    text: `Code : ${accessCode}\nConnexion : ${url}\nEmail : ${to}`,
   });
   return { sent: true };
 }

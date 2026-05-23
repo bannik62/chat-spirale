@@ -1,67 +1,64 @@
 <script>
-  import { adminFetch, getAdminToken, setAdminToken } from '../lib/api.js';
+  import { onMount } from 'svelte';
+  import { adminFetch, authFetch, getAdminToken, setAdminToken } from '../lib/api.js';
+  import ParticipantPicker from '../lib/ParticipantPicker.svelte';
+  import { CreateChatForm, CreateParticipantForm, JoinChatForm } from '../lib/fields/index.js';
+  import { touchForm } from '../lib/fields/reactive.js';
 
-  let token = $state(getAdminToken());
-  let email = $state('');
-  let password = $state('');
+  let isLoggedIn = $state(false);
+  let authReady = $state(false);
+  let tab = $state('salons');
   let error = $state('');
+  let success = $state('');
   let loading = $state(false);
 
-  let chatName = $state('');
-  let emailList = $state('');
-  let isPermanent = $state(false);
-  let chats = $state([]);
-  let success = $state('');
+  let chatForm = $state(new CreateChatForm());
+  let participantForm = $state(new CreateParticipantForm());
+  let joinForm = $state(new JoinChatForm());
+  let pickList = $state([]);
+  let tick = $state(0);
 
-  async function login() {
-    error = '';
-    loading = true;
-    try {
-      const res = await fetch('/api/admin/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      setAdminToken(data.token);
-      token = data.token;
-      await loadChats();
-    } catch (e) {
-      error = e.message;
-    } finally {
-      loading = false;
-    }
+  let chats = $state([]);
+  let participants = $state([]);
+  let lastCreatedCode = $state('');
+
+  function refreshUi() {
+    tick++;
   }
 
-  async function loadChats() {
+  let canCreateParticipant = $derived.by(() => {
+    tick;
+    pickList;
+    participantForm.roomIds.ids;
+    return pickList.length > 0 && participantForm.roomIds.isValid;
+  });
+
+  async function refresh() {
     chats = await adminFetch('/chats');
+    participants = await adminFetch('/participants');
+    participantForm.roomIds.setDefault(chats.map((c) => c.id));
+    participantForm = touchForm(participantForm);
+    refreshUi();
   }
 
   async function createChat() {
     error = '';
     success = '';
-    const emails = emailList
-      .split('\n')
-      .map((e) => e.trim())
-      .filter((e) => e.includes('@'));
-
-    if (!chatName.trim() || emails.length === 0) {
-      error = 'Nom et au moins un email requis';
+    const err = chatForm.firstError();
+    if (err) {
+      error = err;
       return;
     }
-
     loading = true;
     try {
-      const res = await adminFetch('/chats', {
+      await adminFetch('/chats', {
         method: 'POST',
-        body: JSON.stringify({ name: chatName, emails, isPermanent }),
+        body: JSON.stringify(chatForm.toJSON()),
       });
-      success = `Chat créé — ${res.invitationsSent}/${res.invitationsTotal} email(s) envoyé(s)`;
-      chatName = '';
-      emailList = '';
-      isPermanent = false;
-      await loadChats();
+      success = 'Salon créé';
+      chatForm.reset();
+      chatForm = touchForm(chatForm);
+      await refresh();
     } catch (e) {
       error = e.message;
     } finally {
@@ -69,10 +66,86 @@
     }
   }
 
+  async function createParticipant() {
+    error = '';
+    success = '';
+    lastCreatedCode = '';
+
+    participantForm.emails.clear();
+    for (const email of pickList) {
+      participantForm.emails.add(email);
+    }
+
+    const err = participantForm.firstError();
+    if (err) {
+      error = err;
+      return;
+    }
+
+    loading = true;
+    const summaries = [];
+    try {
+      for (const email of pickList) {
+        const normalized = email;
+        const alreadyRegistered = participants.some((p) => p.email === normalized);
+        const payload = participantForm.payloadForEmail(email, { alreadyRegistered });
+
+        const res = await adminFetch('/participants', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
+        lastCreatedCode = res.accessCode;
+        if (res.merged) {
+          summaries.push(`${res.email} : salons ajoutés (code ${res.accessCode})`);
+        } else {
+          summaries.push(`${res.email} : nouveau, code ${res.accessCode}`);
+        }
+      }
+      success = summaries.join(' · ');
+      pickList = [];
+      participantForm.emails.clear();
+      participantForm = touchForm(participantForm);
+      await refresh();
+    } catch (e) {
+      error = e.message;
+    } finally {
+      loading = false;
+    }
+  }
+
+  function toggleRoom(id) {
+    participantForm.roomIds.toggle(id);
+    participantForm = touchForm(participantForm);
+    refreshUi();
+  }
+
+  async function joinChat(id) {
+    loading = true;
+    error = '';
+    try {
+      const adminToken = getAdminToken();
+      const res = await fetch(`/api/admin/chats/${id}/join`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify(joinForm.toJSON()),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      window.location.href = data.roomUrl;
+    } catch (e) {
+      error = e.message;
+      loading = false;
+    }
+  }
+
   async function deleteChat(id) {
-    if (!confirm('Supprimer ce chat et tous ses messages ?')) return;
+    if (!confirm('Supprimer ce salon ?')) return;
     await adminFetch(`/chats/${id}`, { method: 'DELETE' });
-    await loadChats();
+    await refresh();
   }
 
   async function extendChat(id) {
@@ -80,97 +153,167 @@
       method: 'PATCH',
       body: JSON.stringify({ extend: true }),
     });
-    await loadChats();
+    await refresh();
   }
 
-  function logout() {
+  async function resendInvite(id) {
+    await adminFetch(`/participants/${id}/send-invite`, { method: 'POST' });
+    success = 'Invitation renvoyée (ou voir logs)';
+  }
+
+  async function logout() {
     setAdminToken(null);
-    token = null;
-    chats = [];
+    try {
+      await authFetch('/logout', { method: 'POST' });
+    } catch {
+      /* ignore */
+    }
+    location.href = '/';
   }
 
-  $effect(() => {
-    if (token) loadChats().catch(() => logout());
+  onMount(async () => {
+    try {
+      const session = await authFetch('/session');
+      if (session.role === 'admin') {
+        isLoggedIn = true;
+        await refresh();
+        authReady = true;
+        return;
+      }
+    } catch {
+      /* ignore */
+    }
+    if (getAdminToken()) {
+      try {
+        await refresh();
+        isLoggedIn = true;
+        authReady = true;
+        return;
+      } catch {
+        setAdminToken(null);
+      }
+    }
+    location.replace('/?mode=admin');
   });
 </script>
 
 <div class="admin">
   <header>
-    <a href="/">← Accueil</a>
-    <h1>Administration</h1>
-    {#if token}
-      <button class="ghost" onclick={logout}>Déconnexion</button>
-    {/if}
+    <a href="/">← Connexion</a>
+    <h1>Gestion — Association Spirale</h1>
+    {#if isLoggedIn}<button class="ghost" onclick={logout}>Déconnexion</button>{/if}
   </header>
 
-  {#if !token}
-    <form class="card" onsubmit={(e) => { e.preventDefault(); login(); }}>
-      <h2>Connexion</h2>
-      {#if error}<p class="err">{error}</p>{/if}
-      <label>
-        Email
-        <input type="email" bind:value={email} required />
-      </label>
-      <label>
-        Mot de passe
-        <input type="password" bind:value={password} required />
-      </label>
-      <button type="submit" disabled={loading}>Se connecter</button>
-    </form>
-  {:else}
-    <section class="card">
-      <h2>Nouveau chat</h2>
-      {#if error}<p class="err">{error}</p>{/if}
-      {#if success}<p class="ok">{success}</p>{/if}
-      <label>
-        Nom du chat
-        <input bind:value={chatName} placeholder="Formation — Groupe A" />
-      </label>
-      <label>
-        Emails <small>(un par ligne)</small>
-        <textarea
-          bind:value={emailList}
-          rows="6"
-          placeholder="jean@example.com&#10;marie@example.com"
-        ></textarea>
-      </label>
-      <label class="row">
-        <input type="checkbox" bind:checked={isPermanent} />
-        Chat permanent (pas de suppression auto le vendredi)
-      </label>
-      <button onclick={createChat} disabled={loading}>Créer et envoyer les invitations</button>
-    </section>
+  {#if !authReady}
+    <p class="muted center">Chargement…</p>
+  {:else if isLoggedIn}
+    <nav class="tabs">
+      <button class:active={tab === 'salons'} onclick={() => (tab = 'salons')}>Salons</button>
+      <button class:active={tab === 'personnes'} onclick={() => (tab = 'personnes')}>Personnes</button>
+    </nav>
 
-    <section class="card">
-      <h2>Chats existants</h2>
-      {#if chats.length === 0}
-        <p class="muted">Aucun chat pour le moment.</p>
-      {:else}
-        <ul class="chat-list">
+    {#if error}<p class="err banner">{error}</p>{/if}
+    {#if success}<p class="ok banner">{success}</p>{/if}
+
+    {#if tab === 'salons'}
+      <section class="card">
+        <h2>Nouveau salon</h2>
+        <label>
+          Nom de l'activité
+          <input bind:value={chatForm.name.value} placeholder="Atelier janvier" />
+        </label>
+        <label class="row">
+          <input type="checkbox" bind:checked={chatForm.isPermanent.checked} />
+          Permanent (pas de suppression auto vendredi)
+        </label>
+        <button onclick={createChat} disabled={loading || !chatForm.canSubmit}>Créer le salon</button>
+      </section>
+
+      <section class="card">
+        <h2>Salons existants</h2>
+        {#if chats.length === 0}
+          <p class="muted">Aucun salon.</p>
+        {:else}
+          <ul class="list">
+            {#each chats as chat}
+              <li>
+                <div>
+                  <strong>{chat.name}</strong>
+                  <span class="muted">
+                    {chat._count.memberships} personne(s) · {chat._count.messages} msg
+                  </span>
+                </div>
+                <div class="actions">
+                  <button class="join" onclick={() => joinChat(chat.id)}>Rejoindre</button>
+                  {#if chat.expiresAt}
+                    <button class="ghost" onclick={() => extendChat(chat.id)}>Prolonger</button>
+                  {/if}
+                  <button class="danger" onclick={() => deleteChat(chat.id)}>Supprimer</button>
+                </div>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </section>
+    {:else}
+      <section class="card">
+        <h2>Ajouter une personne</h2>
+        <p class="muted">
+          Cochez les salons à ajouter. Personne déjà inscrite : <strong>même code</strong>,
+          pas d'email automatique (utilisez « Renvoyer mail » dans la liste si besoin).
+        </p>
+        <ParticipantPicker allParticipants={participants} bind:pickList />
+        <label class="row invite-mail-row">
+          <input type="checkbox" bind:checked={participantForm.sendInviteEmail.checked} />
+          Envoyer l'email avec le code (nouvelle personne uniquement par défaut)
+        </label>
+        <fieldset>
+          <legend>Salons autorisés</legend>
           {#each chats as chat}
-            <li>
-              <div>
-                <strong>{chat.name}</strong>
-                <span class="muted">
-                  {chat._count.tokens} participant(s) · {chat._count.messages} message(s)
-                </span>
-                {#if chat.expiresAt}
-                  <span class="exp">Expire {new Date(chat.expiresAt).toLocaleString('fr-FR')}</span>
-                {:else}
-                  <span class="perm">Permanent</span>
-                {/if}
-              </div>
-              <div class="actions">
-                {#if chat.expiresAt}
-                  <button class="ghost" onclick={() => extendChat(chat.id)}>Prolonger</button>
-                {/if}
-                <button class="danger" onclick={() => deleteChat(chat.id)}>Supprimer</button>
-              </div>
-            </li>
+            <label class="row">
+              <input
+                type="checkbox"
+                checked={participantForm.roomIds.includes(chat.id)}
+                onchange={() => toggleRoom(chat.id)}
+              />
+              {chat.name}
+            </label>
           {/each}
-        </ul>
-      {/if}
-    </section>
+        </fieldset>
+        <button onclick={createParticipant} disabled={loading || !canCreateParticipant}>
+          {loading ? 'Enregistrement…' : "Enregistrer l'accès"}
+        </button>
+        {#if lastCreatedCode}
+          <p class="code-display">Code : <strong>{lastCreatedCode}</strong></p>
+        {/if}
+      </section>
+
+      <section class="card">
+        <h2>Personnes inscrites</h2>
+        {#if participants.length === 0}
+          <p class="muted">Aucune personne.</p>
+        {:else}
+          <ul class="list">
+            {#each participants as p}
+              <li class="person">
+                <div>
+                  <strong>{p.email}</strong>
+                  <span class="code">Code : {p.accessCode}</span>
+                  <span class="muted">
+                    {#each p.rooms as r, i}
+                      {r.name}{i < p.rooms.length - 1 ? ' · ' : ''}
+                    {/each}
+                  </span>
+                </div>
+                <div class="actions">
+                  <button class="ghost" onclick={() => resendInvite(p.id)}>Renvoyer mail</button>
+                </div>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </section>
+    {/if}
   {/if}
 </div>
 
@@ -185,7 +328,7 @@
     display: flex;
     align-items: center;
     gap: 1rem;
-    margin-bottom: 2rem;
+    margin-bottom: 1.5rem;
     flex-wrap: wrap;
   }
 
@@ -193,6 +336,32 @@
     flex: 1;
     margin: 0;
     font-size: 1.5rem;
+  }
+
+  .tabs {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+  }
+
+  .tabs button {
+    flex: 1;
+    padding: 0.65rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    border-radius: 8px;
+    font-weight: 600;
+  }
+
+  .tabs button.active {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+  }
+
+  .banner {
+    margin-bottom: 1rem;
   }
 
   .card {
@@ -215,15 +384,22 @@
     font-weight: 500;
   }
 
-  label small {
-    font-weight: 400;
-    color: var(--muted);
+  fieldset {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 1rem;
   }
 
-  input[type='text'],
+  legend {
+    padding: 0 0.25rem;
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
+
   input[type='email'],
   input[type='password'],
-  textarea {
+  input:not([type='checkbox']) {
     display: block;
     width: 100%;
     margin-top: 0.4rem;
@@ -234,19 +410,15 @@
     color: var(--text);
   }
 
-  textarea {
-    font-family: ui-monospace, monospace;
-    resize: vertical;
-  }
-
   .row {
     display: flex;
     align-items: center;
     gap: 0.5rem;
+    margin-bottom: 0.5rem;
   }
 
-  button[type='submit'],
-  .card > button {
+  .card > button,
+  button[type='submit'] {
     width: 100%;
     padding: 0.75rem;
     background: var(--accent);
@@ -256,8 +428,13 @@
     font-weight: 600;
   }
 
-  button:disabled {
-    opacity: 0.5;
+  .join {
+    background: var(--accent);
+    color: white;
+    border: none;
+    padding: 0.4rem 0.75rem;
+    border-radius: 6px;
+    font-weight: 600;
   }
 
   .ghost {
@@ -276,28 +453,13 @@
     border-radius: 6px;
   }
 
-  .err {
-    color: var(--danger);
-    margin: 0 0 1rem;
-  }
-
-  .ok {
-    color: var(--success);
-    margin: 0 0 1rem;
-  }
-
-  .muted {
-    color: var(--muted);
-    font-size: 0.85rem;
-  }
-
-  .chat-list {
+  .list {
     list-style: none;
     padding: 0;
     margin: 0;
   }
 
-  .chat-list li {
+  .list li {
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
@@ -306,32 +468,56 @@
     border-bottom: 1px solid var(--border);
   }
 
-  .chat-list li:last-child {
+  .list li:last-child {
     border-bottom: none;
   }
 
-  .chat-list strong {
+  .list strong {
     display: block;
   }
 
-  .exp,
-  .perm {
+  .person .code {
     display: block;
-    font-size: 0.8rem;
-    margin-top: 0.25rem;
+    font-family: ui-monospace, monospace;
+    font-size: 0.9rem;
+    margin: 0.25rem 0;
+    color: var(--accent-hover);
   }
 
-  .perm {
-    color: var(--success);
-  }
-
-  .exp {
-    color: var(--muted);
+  .code-display {
+    margin-top: 1rem;
+    padding: 1rem;
+    background: var(--bg);
+    border-radius: 8px;
+    text-align: center;
+    font-size: 1.1rem;
   }
 
   .actions {
     display: flex;
+    flex-wrap: wrap;
     gap: 0.5rem;
     flex-shrink: 0;
+  }
+
+  .err {
+    color: var(--danger);
+  }
+
+  .ok {
+    color: var(--success);
+  }
+
+  .muted {
+    color: var(--muted);
+    font-size: 0.85rem;
+    display: block;
+    margin-top: 0.2rem;
+  }
+
+  .center {
+    text-align: center;
+    padding: 3rem;
+    color: var(--muted);
   }
 </style>

@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: spirale
       POSTGRES_DB: spirale
     ports:
-      - '5432:5432'
+      - '5433:5432'  # 5433 hôte : évite conflit si Postgres tourne déjà sur 5432
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -18,13 +18,14 @@ services:
   backend:
     build: ./backend
     ports:
-      - '3000:3000'
+      - '3002:3000'  # 3002 hôte : 3000 déjà pris par codeurbase sur ta machine
     environment:
       DATABASE_URL: postgresql://spirale:spirale@postgres:5432/spirale
       JWT_SECRET: dev-secret-change-me
       ADMIN_EMAIL: admin@spirale.local
       ADMIN_PASSWORD: admin123
-      FRONTEND_URL: http://localhost:5173
+      FRONTEND_URL: http://localhost:8081
+      DEV_SEED: '1'
       PORT: 3000
       SMTP_HOST: smtp.gmail.com
       SMTP_PORT: 587
@@ -37,7 +38,7 @@ services:
   frontend:
     build: ./frontend
     ports:
-      - '8080:80'
+      - '8081:80'  # 8081 : yt-webService utilise déjà 8080 en dev Docker
     depends_on:
       - backend
 

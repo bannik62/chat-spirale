@@ -1,0 +1,569 @@
+<script>
+  import { onMount } from 'svelte';
+  import { io } from 'socket.io-client';
+  import { roomFetch, adminFetch, getAdminToken } from '../lib/api.js';
+  import ParticipantPicker from '../lib/ParticipantPicker.svelte';
+  import {
+    SetDisplayNameForm,
+    MessageContentField,
+    InviteInRoomForm,
+  } from '../lib/fields/index.js';
+  import { touchForm } from '../lib/fields/reactive.js';
+
+  let roomId = $state('');
+  let isAdmin = $state(!!getAdminToken());
+  let showInvite = $state(false);
+  let pickList = $state([]);
+  let allParticipants = $state([]);
+  let inviteFeedback = $state('');
+  let members = $state([]);
+  let profile = $state(null);
+  let showNamePrompt = $state(false);
+  let nameForm = $state(new SetDisplayNameForm());
+  let messageField = $state(new MessageContentField());
+  let inviteForm = $state(new InviteInRoomForm());
+  let tick = $state(0);
+
+  let messages = $state([]);
+  let systemLines = $state([]);
+  let error = $state('');
+  let socket = $state(null);
+  let listEl = $state(null);
+
+  function refreshUi() {
+    tick++;
+  }
+
+  let canSaveName = $derived.by(() => {
+    tick;
+    return nameForm.canSubmit;
+  });
+
+  let canSendMessage = $derived.by(() => {
+    tick;
+    return messageField.isValid;
+  });
+
+  function getRoomId() {
+    const m = window.location.pathname.match(/^\/salon\/([^/]+)/);
+    return m?.[1] || '';
+  }
+
+  async function loadProfile(id) {
+    profile = await roomFetch(id, '/profile');
+    if (!profile.displayName) {
+      showNamePrompt = true;
+      return false;
+    }
+    return true;
+  }
+
+  async function saveName() {
+    error = '';
+    const err = nameForm.firstError();
+    if (err) {
+      error = err;
+      return;
+    }
+    await roomFetch(roomId, '/set-name', {
+      method: 'POST',
+      body: JSON.stringify(nameForm.toJSON()),
+    });
+    profile.displayName = nameForm.displayName.value;
+    showNamePrompt = false;
+    await connectSocket();
+  }
+
+  async function loadMembers() {
+    if (!isAdmin || !roomId) return;
+    try {
+      members = await adminFetch(`/chats/${roomId}/members`);
+    } catch {
+      members = [];
+    }
+  }
+
+  async function loadAllParticipants() {
+    try {
+      allParticipants = await adminFetch('/participants');
+    } catch {
+      allParticipants = [];
+    }
+  }
+
+  async function openInvite() {
+    showInvite = !showInvite;
+    if (showInvite) {
+      pickList = [];
+      inviteFeedback = '';
+      inviteForm.emails.clear();
+      inviteForm = touchForm(inviteForm);
+      await Promise.all([loadMembers(), loadAllParticipants()]);
+    }
+  }
+
+  async function addParticipants() {
+    inviteFeedback = '';
+
+    inviteForm.emails.clear();
+    for (const email of pickList) {
+      inviteForm.emails.add(email);
+    }
+
+    const err = inviteForm.firstError();
+    if (err) {
+      inviteFeedback = err;
+      return;
+    }
+
+    try {
+      const res = await adminFetch(`/chats/${roomId}/add-participants`, {
+        method: 'POST',
+        body: JSON.stringify(inviteForm.toJSON()),
+      });
+      const lines = res.results.map((r) => {
+        if (r.isNew) return `${r.email} : nouveau, code ${r.accessCode}${r.mail?.sent ? ', email envoyé' : ''}`;
+        if (r.alreadyInRoom) return `${r.email} : déjà dans le salon (code ${r.accessCode})`;
+        return `${r.email} : accès ajouté, même code ${r.accessCode}`;
+      });
+      inviteFeedback = lines.join('\n');
+      pickList = [];
+      inviteForm.emails.clear();
+      inviteForm = touchForm(inviteForm);
+      await Promise.all([loadMembers(), loadAllParticipants()]);
+    } catch (e) {
+      inviteFeedback = e.message;
+    }
+  }
+
+  async function connectSocket() {
+    messages = await roomFetch(roomId, '/messages');
+
+    socket?.disconnect();
+    socket = io({
+      path: '/socket.io',
+      withCredentials: true,
+      auth: { roomId },
+    });
+
+    socket.on('message', (msg) => {
+      messages = [...messages, msg];
+      scrollBottom();
+    });
+
+    socket.on('system-message', (ev) => {
+      systemLines = [...systemLines, ev];
+    });
+
+    socket.on('connect_error', () => {
+      error = 'Connexion temps réel impossible — rechargez la page';
+    });
+  }
+
+  function sendMessage() {
+    if (!messageField.isValid || !socket?.connected) return;
+    socket.emit('message', messageField.toSocketPayload());
+    messageField.reset();
+    messageField = touchForm(messageField);
+    refreshUi();
+  }
+
+  function scrollBottom() {
+    requestAnimationFrame(() => {
+      if (listEl) listEl.scrollTop = listEl.scrollHeight;
+    });
+  }
+
+  onMount(() => {
+    roomId = getRoomId();
+    if (!roomId) {
+      error = 'Salon introuvable';
+      return;
+    }
+
+    loadProfile(roomId)
+      .then((ok) => {
+        if (ok) {
+          if (isAdmin) loadMembers();
+          return connectSocket();
+        }
+      })
+      .catch((e) => {
+        if (e.message.includes('connecté') || e.message.includes('Session')) {
+          location.href = '/';
+        } else {
+          error = e.message;
+        }
+      });
+
+    return () => socket?.disconnect();
+  });
+
+  $effect(() => {
+    if (messages.length) scrollBottom();
+  });
+</script>
+
+<div class="chat-page">
+  {#if error && !profile}
+    <div class="center">
+      <p class="err">{error}</p>
+      <a href="/mes-activites">← Mes activités</a>
+    </div>
+  {:else if showNamePrompt && profile}
+    <div class="modal-backdrop">
+      <div class="modal">
+        <h2>Bienvenue</h2>
+        <p>Activité : <strong>{profile.chatRoom.name}</strong></p>
+        <p class="muted">{profile.email}</p>
+        {#if error}<p class="err">{error}</p>{/if}
+        <label>
+          Comment vous appelez-vous ?
+          <input
+            bind:value={nameForm.displayName.value}
+            placeholder="Prénom ou pseudo"
+            oninput={refreshUi}
+          />
+        </label>
+        <button onclick={saveName} disabled={!canSaveName}>
+          Entrer dans le groupe
+        </button>
+      </div>
+    </div>
+  {:else if profile}
+    <header>
+      <div>
+        <p class="room">{profile.chatRoom.name}</p>
+        <p class="you">{profile.displayName} · {profile.email}</p>
+      </div>
+      <div class="header-actions">
+        {#if isAdmin}
+          <button type="button" class="invite-toggle" onclick={openInvite}>
+            {showInvite ? 'Fermer' : '+ Inviter'}
+          </button>
+          <a class="back" href="/admin">Admin</a>
+        {/if}
+        <a class="back" href="/mes-activites">Activités</a>
+      </div>
+    </header>
+
+    {#if isAdmin && showInvite}
+      <section class="invite-panel">
+        <h3>Ajouter des personnes à ce salon</h3>
+        <p class="muted">
+          Choisissez dans la liste ou tapez un nouvel email. Même code si déjà inscrit.
+        </p>
+        <ParticipantPicker
+          {allParticipants}
+          bind:pickList
+          roomMemberEmails={members.map((m) => m.email)}
+        />
+        <button
+          type="button"
+          class="invite-submit"
+          onclick={addParticipants}
+          disabled={pickList.length === 0}
+        >
+          Mettre à jour les accès ({pickList.length})
+        </button>
+        {#if inviteFeedback}
+          <pre class="invite-result">{inviteFeedback}</pre>
+        {/if}
+        {#if members.length > 0}
+          <details class="members-list">
+            <summary>{members.length} personne(s) autorisée(s)</summary>
+            <ul>
+              {#each members as m}
+                <li>
+                  {m.displayName || '—'} · {m.email}
+                  <span class="code-hint">({m.accessCode})</span>
+                </li>
+              {/each}
+            </ul>
+          </details>
+        {/if}
+      </section>
+    {/if}
+
+    <div class="messages" bind:this={listEl}>
+      {#each messages as msg}
+        <div class="msg">
+          <span class="author">{msg.senderName}</span>
+          <span class="body">{msg.content}</span>
+          <time>{new Date(msg.createdAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</time>
+        </div>
+      {/each}
+      {#each systemLines as line}
+        <p class="system">{line.content}</p>
+      {/each}
+    </div>
+
+    <form
+      class="composer"
+      onsubmit={(e) => {
+        e.preventDefault();
+        sendMessage();
+      }}
+    >
+      <input
+        bind:value={messageField.value}
+        placeholder="Votre message…"
+        autocomplete="off"
+        oninput={refreshUi}
+      />
+      <button type="submit" disabled={!canSendMessage}>Envoyer</button>
+    </form>
+  {:else}
+    <div class="center"><p class="muted">Chargement…</p></div>
+  {/if}
+</div>
+
+<style>
+  .chat-page {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    max-width: 800px;
+    margin: 0 auto;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+
+  .room {
+    margin: 0;
+    font-weight: 700;
+    font-size: 1.1rem;
+  }
+
+  .you {
+    margin: 0.25rem 0 0;
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-shrink: 0;
+  }
+
+  .back {
+    font-size: 0.85rem;
+    color: var(--muted);
+    text-decoration: none;
+    white-space: nowrap;
+  }
+
+  .invite-toggle {
+    padding: 0.4rem 0.65rem;
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+
+  .invite-panel {
+    padding: 1rem 1.25rem;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .invite-panel h3 {
+    margin: 0 0 0.35rem;
+    font-size: 1rem;
+  }
+
+  .invite-submit {
+    margin-top: 0.75rem;
+    width: 100%;
+    padding: 0.65rem;
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+  }
+
+  .invite-submit:disabled {
+    opacity: 0.5;
+  }
+
+  .invite-result {
+    margin: 0.75rem 0 0;
+    padding: 0.75rem;
+    background: var(--bg);
+    border-radius: 8px;
+    font-size: 0.8rem;
+    white-space: pre-wrap;
+    color: var(--success);
+  }
+
+  .members-list {
+    margin-top: 1rem;
+    font-size: 0.85rem;
+  }
+
+  .members-list ul {
+    margin: 0.5rem 0 0;
+    padding-left: 1.25rem;
+    color: var(--muted);
+  }
+
+  .code-hint {
+    font-family: ui-monospace, monospace;
+    font-size: 0.75rem;
+  }
+
+  .messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1rem 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .msg {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.65rem 0.85rem;
+    max-width: 85%;
+  }
+
+  .author {
+    display: block;
+    font-weight: 600;
+    font-size: 0.85rem;
+    color: var(--accent-hover);
+    margin-bottom: 0.2rem;
+  }
+
+  .body {
+    display: block;
+    line-height: 1.45;
+  }
+
+  time {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--muted);
+    margin-top: 0.35rem;
+  }
+
+  .system {
+    text-align: center;
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+
+  .composer {
+    display: flex;
+    gap: 0.5rem;
+    padding: 1rem 1.25rem;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+  }
+
+  .composer input {
+    flex: 1;
+    padding: 0.75rem 1rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+  }
+
+  .composer button {
+    padding: 0.75rem 1.25rem;
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+  }
+
+  .composer button:disabled {
+    opacity: 0.5;
+  }
+
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.75);
+    display: grid;
+    place-items: center;
+    z-index: 100;
+    padding: 1rem;
+  }
+
+  .modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 2rem;
+    max-width: 400px;
+    width: 100%;
+  }
+
+  .modal h2 {
+    margin: 0 0 0.5rem;
+  }
+
+  .modal label {
+    display: block;
+    margin: 1rem 0;
+    font-weight: 500;
+  }
+
+  .modal input {
+    width: 100%;
+    padding: 0.75rem;
+    margin-top: 0.5rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+  }
+
+  .modal button {
+    width: 100%;
+    padding: 0.75rem;
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+  }
+
+  .modal button:disabled {
+    opacity: 0.5;
+  }
+
+  .center {
+    flex: 1;
+    display: grid;
+    place-items: center;
+    text-align: center;
+    padding: 2rem;
+  }
+
+  .err {
+    color: var(--danger);
+  }
+
+  .muted {
+    color: var(--muted);
+  }
+</style>

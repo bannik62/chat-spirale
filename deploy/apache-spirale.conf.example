@@ -1,0 +1,40 @@
+# Exemple VirtualHost Apache — Association Spirale
+# URL prod : https://spirale-beau-marais.vitalinfo.site
+# Internet → Apache (443) → conteneur nginx (127.0.0.1:8080)
+#
+# Le conteneur frontend (nginx) sert la SPA et proxy /api + /socket.io
+# vers le backend sur le réseau Docker interne. Pas besoin d'exposer
+# le backend sur Internet.
+
+<VirtualHost *:80>
+    ServerName spirale-beau-marais.vitalinfo.site
+    Redirect permanent / https://spirale-beau-marais.vitalinfo.site/
+</VirtualHost>
+
+<VirtualHost *:443>
+    ServerName spirale-beau-marais.vitalinfo.site
+
+    SSLEngine on
+    # SSLCertificateFile /etc/letsencrypt/live/spirale-beau-marais.vitalinfo.site/fullchain.pem
+    # SSLCertificateKeyFile /etc/letsencrypt/live/spirale-beau-marais.vitalinfo.site/privkey.pem
+
+    ProxyPreserveHost On
+    RequestHeader set X-Forwarded-Proto "https"
+    RequestHeader set X-Forwarded-For "%{REMOTE_ADDR}s"
+
+    # Tout passe par le conteneur frontend (nginx → backend en interne)
+    ProxyPass / http://127.0.0.1:8080/
+    ProxyPassReverse / http://127.0.0.1:8080/
+
+    # WebSocket (chat temps réel)
+    RewriteEngine On
+    RewriteCond %{HTTP:Upgrade} websocket [NC]
+    RewriteCond %{HTTP:Connection} upgrade [NC]
+    RewriteRule /(.*) ws://127.0.0.1:8080/$1 [P,L]
+
+    ProxyPass /socket.io/ ws://127.0.0.1:8080/socket.io/
+    ProxyPassReverse /socket.io/ ws://127.0.0.1:8080/socket.io/
+
+    ErrorLog ${APACHE_LOG_DIR}/spirale-error.log
+    CustomLog ${APACHE_LOG_DIR}/spirale-access.log combined
+</VirtualHost>

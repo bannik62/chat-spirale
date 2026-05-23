@@ -1,0 +1,135 @@
+import { Router } from 'express';
+import jwt from 'jsonwebtoken';
+import { SESSION_COOKIE } from '../middleware/participantAuth.js';
+import { issueParticipantSession } from '../utils/participantSession.js';
+import { verifyAdminCredentials, createAdminJwt, getAdminFromRequest } from '../utils/adminLogin.js';
+import { verifyParticipantCredentials, participantRedirect } from '../utils/participantLogin.js';
+import { roomsForParticipant } from '../utils/roomsForParticipant.js';
+import { adminCookieOptions, sessionCookieOptions } from '../middleware/security.js';
+
+const router = Router();
+
+/** Connexion unique : mode admin (mdp) ou participant (code) → redirect selon rôle */
+router.post('/portal-login', async (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const mode = req.body?.mode === 'admin' ? 'admin' : 'participant';
+
+  if (!email.includes('@')) {
+    return res.status(400).json({ error: 'Email invalide' });
+  }
+
+  if (mode === 'admin') {
+    const password = req.body?.password;
+    if (!password) {
+      return res.status(400).json({ error: 'Mot de passe requis' });
+    }
+
+    const admin = await verifyAdminCredentials(email, password);
+    if (!admin) {
+      return res.status(401).json({ error: 'Email ou mot de passe incorrect' });
+    }
+
+    const token = createAdminJwt(admin);
+    res.cookie('spirale_admin', token, adminCookieOptions());
+
+    return res.json({
+      role: 'admin',
+      email: admin.email,
+      redirect: '/admin',
+      token,
+    });
+  }
+
+  const code = req.body?.code;
+  const result = await verifyParticipantCredentials(email, code);
+  if (result.error) {
+    return res.status(result.error.includes('incorrect') ? 401 : 403).json({
+      error: result.error,
+    });
+  }
+
+  issueParticipantSession(res, result.participant);
+
+  return res.json({
+    role: 'participant',
+    email: result.participant.email,
+    redirect: participantRedirect(result.rooms),
+    rooms: result.rooms,
+  });
+});
+
+/** Session active (participant cookie ou admin bearer/cookie) */
+router.get('/session', async (req, res) => {
+  const admin = getAdminFromRequest(req);
+  if (admin) {
+    return res.json({ role: 'admin', email: admin.email, redirect: '/admin' });
+  }
+
+  const token = req.cookies?.[SESSION_COOKIE];
+  if (!token) {
+    return res.json({ role: null });
+  }
+
+  try {
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    if (payload.role !== 'participant') {
+      return res.json({ role: null });
+    }
+    const rooms = await roomsForParticipant(payload.sub);
+    if (rooms.length === 0) {
+      return res.json({ role: null });
+    }
+    return res.json({
+      role: 'participant',
+      email: payload.email,
+      redirect: participantRedirect(rooms),
+      rooms,
+    });
+  } catch {
+    return res.json({ role: null });
+  }
+});
+
+router.post('/login', async (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const result = await verifyParticipantCredentials(email, req.body?.code);
+  if (result.error) {
+    return res.status(result.error.includes('incorrect') ? 401 : 403).json({
+      error: result.error,
+    });
+  }
+
+  issueParticipantSession(res, result.participant);
+  res.json({
+    role: 'participant',
+    email: result.participant.email,
+    rooms: result.rooms,
+    redirect: participantRedirect(result.rooms),
+  });
+});
+
+router.get('/me', async (req, res) => {
+  const token = req.cookies?.[SESSION_COOKIE];
+  if (!token) return res.status(401).json({ error: 'Non connecté' });
+
+  try {
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    if (payload.role !== 'participant') {
+      return res.status(401).json({ error: 'Session invalide' });
+    }
+    const rooms = await roomsForParticipant(payload.sub);
+    res.json({ email: payload.email, rooms });
+  } catch {
+    res.status(401).json({ error: 'Session expirée' });
+  }
+});
+
+router.post('/logout', (req, res) => {
+  const sessionOpts = sessionCookieOptions();
+  const adminOpts = adminCookieOptions();
+  res.clearCookie(SESSION_COOKIE, sessionOpts);
+  res.clearCookie('spirale_admin', adminOpts);
+  res.json({ ok: true });
+});
+
+export default router;

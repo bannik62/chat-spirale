@@ -2,6 +2,18 @@ node_modules/
 dist/
 .env
 .env.local
+.env.prod
+backend/.env
+backend/.env.prod
 *.log
 .DS_Store
 backend/prisma/*.db
+
+# Apache — vhost réel sur le serveur (modèle versionné : deploy/*.conf.example)
+deploy/apache-spirale.conf
+deploy/*.conf
+!deploy/*.conf.example
+
+# Notes de déploiement locales (secrets, IP, chemins serveur)
+docs/DEPLOIEMENT.md
+docs/*.local.md

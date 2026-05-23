@@ -15,30 +15,92 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - name: Deploy via SSH
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Ensure deploy dir exists
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT }}
           script: |
             set -e
-            cd ${{ secrets.DEPLOY_PATH }}
-            export BACKEND_IMAGE=ghcr.io/${{ github.repository }}/backend:latest
-            export FRONTEND_IMAGE=ghcr.io/${{ github.repository }}/frontend:latest
-            export DATABASE_URL="${{ secrets.DATABASE_URL }}"
-            export JWT_SECRET="${{ secrets.JWT_SECRET }}"
-            export ADMIN_EMAIL="${{ secrets.ADMIN_EMAIL }}"
-            export ADMIN_PASSWORD="${{ secrets.ADMIN_PASSWORD }}"
-            export FRONTEND_URL="${{ secrets.FRONTEND_URL }}"
-            export SMTP_HOST="${{ secrets.SMTP_HOST }}"
-            export SMTP_PORT="${{ secrets.SMTP_PORT }}"
-            export SMTP_USER="${{ secrets.SMTP_USER }}"
-            export SMTP_PASS="${{ secrets.SMTP_PASS }}"
-            export POSTGRES_USER="${{ secrets.POSTGRES_USER }}"
-            export POSTGRES_PASSWORD="${{ secrets.POSTGRES_PASSWORD }}"
-            export POSTGRES_DB="${{ secrets.POSTGRES_DB }}"
-            export HTTP_PORT="${{ secrets.HTTP_PORT }}"
-            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            docker compose -f docker-compose.prod.yml pull
-            docker compose -f docker-compose.prod.yml up -d
+            DEP="${{ secrets.DEPLOY_PATH }}"
+            mkdir -p "$DEP/backend" "$DEP/frontend"
+            sudo chown -R "$(whoami):www-data" "$DEP" 2>/dev/null || true
+            sudo find "$DEP" -type d -exec chmod g+s {} \; 2>/dev/null || true
+            sudo chmod -R g+rwX "$DEP" 2>/dev/null || true
+
+      - name: Write .env.prod on VPS
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          DEP="$(printf '%s' "$DEPLOY_PATH" | tr -d '\r\n')"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" | tr -d '\r' > ~/.ssh/spirale_deploy
+          chmod 600 ~/.ssh/spirale_deploy
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          {
+            printf '%s\n' "POSTGRES_USER=${{ secrets.POSTGRES_USER }}"
+            printf '%s\n' "POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}"
+            printf '%s\n' "POSTGRES_DB=${{ secrets.POSTGRES_DB }}"
+            printf '%s\n' "DATABASE_URL=${{ secrets.DATABASE_URL }}"
+            printf '%s\n' "JWT_SECRET=${{ secrets.JWT_SECRET }}"
+            printf '%s\n' "ADMIN_EMAIL=${{ secrets.ADMIN_EMAIL }}"
+            printf '%s\n' "ADMIN_PASSWORD=${{ secrets.ADMIN_PASSWORD }}"
+            printf '%s\n' "FRONTEND_URL=${{ secrets.FRONTEND_URL }}"
+            printf '%s\n' "TRUST_PROXY=1"
+            printf '%s\n' "DEV_SEED=0"
+            printf '%s\n' "SMTP_HOST=${{ secrets.SMTP_HOST }}"
+            printf '%s\n' "SMTP_PORT=${{ secrets.SMTP_PORT }}"
+            printf '%s\n' "SMTP_USER=${{ secrets.SMTP_USER }}"
+            printf '%s\n' "SMTP_PASS=${{ secrets.SMTP_PASS }}"
+            printf '%s\n' "SPIRALE_HTTP_PORT=${{ secrets.SPIRALE_HTTP_PORT }}"
+          } | ssh -i ~/.ssh/spirale_deploy -p "$DEPLOY_PORT" -o StrictHostKeyChecking=accept-new \
+              "$DEPLOY_USER@$DEPLOY_HOST" \
+              "umask 077; cat > ${DEP}/.env.prod && chmod 600 ${DEP}/.env.prod"
+
+      - name: Rsync backend, frontend and compose to VPS
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          DEP="$(printf '%s' "$DEPLOY_PATH" | tr -d '\r\n')"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" | tr -d '\r' > ~/.ssh/spirale_deploy
+          chmod 600 ~/.ssh/spirale_deploy
+          export RSYNC_RSH="ssh -i $HOME/.ssh/spirale_deploy -p $DEPLOY_PORT -o StrictHostKeyChecking=accept-new"
+          rsync -avz --delete \
+            --exclude node_modules \
+            --exclude dist \
+            backend/ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEP}/backend/"
+          rsync -avz --delete \
+            --exclude node_modules \
+            --exclude dist \
+            frontend/ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEP}/frontend/"
+          rsync -avz docker-compose.prod.yml "${DEPLOY_USER}@${DEPLOY_HOST}:${DEP}/"
+
+      - name: Build and restart containers
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT }}
+          script: |
+            set -e
+            cd "${{ secrets.DEPLOY_PATH }}"
+            sudo docker compose -f docker-compose.prod.yml --env-file .env.prod build
+            sudo docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
