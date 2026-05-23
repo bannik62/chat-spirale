@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { authFetch, setAdminToken } from '../lib/api.js';
+  import { logAction, logError } from '../lib/debugLog.js';
 
   let email = $state('');
   let rooms = $state([]);
@@ -8,18 +9,22 @@
   let loading = $state(true);
 
   onMount(async () => {
+    logAction('MyActivities', 'page mount');
     try {
       const data = await authFetch('/me');
       email = data.email;
       rooms = data.rooms;
+      logAction('MyActivities', 'loaded', { email, roomCount: rooms.length });
       if (rooms.length === 1) {
+        logAction('MyActivities', 'redirect single room', { roomId: rooms[0].id });
         location.replace(`/salon/${rooms[0].id}`);
         return;
       }
       if (rooms.length === 0) {
         error = 'Aucune activité accessible';
       }
-    } catch {
+    } catch (e) {
+      logError('MyActivities', 'load', e);
       location.href = '/';
     } finally {
       loading = false;
@@ -27,9 +32,14 @@
   });
 
   async function logout() {
+    logAction('MyActivities', 'logout');
     setAdminToken(null);
     await authFetch('/logout', { method: 'POST' });
     location.href = '/';
+  }
+
+  function openRoom(room) {
+    logAction('MyActivities', 'open room', { roomId: room.id, name: room.name });
   }
 </script>
 
@@ -49,7 +59,7 @@
   {:else}
     <div class="buttons">
       {#each rooms as room}
-        <a class="room-btn" href="/salon/{room.id}">
+        <a class="room-btn" href="/salon/{room.id}" onclick={() => openRoom(room)}>
           <span class="room-name">{room.name}</span>
           {#if room.displayName}
             <span class="room-you">Connecté comme {room.displayName}</span>

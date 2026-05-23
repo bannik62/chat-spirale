@@ -1,6 +1,7 @@
 <script>
   import { EmailListField, ParticipantSearchField } from './fields/index.js';
   import { touchForm } from './fields/reactive.js';
+  import { logAction } from './debugLog.js';
 
   /**
    * @type {{
@@ -59,6 +60,7 @@
 
   function addEmail(email) {
     if (emailList.add(email)) {
+      logAction('ParticipantPicker', 'addEmail', { email });
       searchField.reset();
       searchField = touchForm(searchField);
       syncOut();
@@ -67,11 +69,13 @@
   }
 
   function removeEmail(email) {
+    logAction('ParticipantPicker', 'removeEmail', { email });
     emailList.remove(email);
     syncOut();
   }
 
   function onInputFocus() {
+    logAction('ParticipantPicker', 'search focus');
     dropdownOpen = true;
   }
 
@@ -87,7 +91,10 @@
       if (canAddNewEmail) addEmail(searchField.value);
       else if (filtered.length === 1) addEmail(filtered[0].email);
     }
-    if (e.key === 'Escape') dropdownOpen = false;
+    if (e.key === 'Escape') {
+      logAction('ParticipantPicker', 'search escape');
+      dropdownOpen = false;
+    }
   }
 
   function inRoom(email) {

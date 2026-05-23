@@ -3,6 +3,7 @@
   import { authFetch, setAdminToken } from '../lib/api.js';
   import { PortalLoginForm } from '../lib/fields/index.js';
   import { touchForm } from '../lib/fields/reactive.js';
+  import { logAction, logError, logApi, logApiOk, logApiErr } from '../lib/debugLog.js';
 
   let form = $state(new PortalLoginForm());
   let tick = $state(0);
@@ -20,14 +21,17 @@
   });
 
   onMount(async () => {
+    logAction('Login', 'page mount');
     const params = new URLSearchParams(window.location.search);
     if (params.get('mode') === 'admin') {
       form.mode.value = 'admin';
       form = touchForm(form);
+      logAction('Login', 'mode URL', { mode: 'admin' });
     }
 
     try {
       const session = await authFetch('/session');
+      logAction('Login', 'session check', { role: session.role });
       if (session.role === 'admin') {
         location.replace('/admin');
         return;
@@ -43,6 +47,7 @@
   });
 
   function setMode(mode) {
+    logAction('Login', 'change mode', { mode });
     form.mode.value = mode;
     form = touchForm(form);
     refresh();
@@ -53,18 +58,28 @@
     const err = form.firstError();
     if (err) {
       error = err;
+      logAction('Login', 'submit blocked validation', { error: err });
       return;
     }
+    logAction('Login', 'submit', { mode: form.mode.value, email: form.email.value });
     loading = true;
     try {
+      const payload = form.toJSON();
+      logApi('POST', '/auth/portal-login', payload);
       const res = await fetch('/api/auth/portal-login', {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form.toJSON()),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      if (!res.ok) {
+        logApiErr('POST', '/auth/portal-login', data.error);
+        throw new Error(data.error);
+      }
+      logApiOk('POST', '/auth/portal-login', { role: data.role, redirect: data.redirect });
+
+      logAction('Login', 'submit success', { role: data.role, redirect: data.redirect });
 
       if (data.role === 'admin') {
         if (data.token) setAdminToken(data.token);
@@ -74,6 +89,7 @@
 
       location.href = data.redirect || '/mes-activites';
     } catch (e) {
+      logError('Login', 'submit', e);
       error = e.message;
       loading = false;
     }

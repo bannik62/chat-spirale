@@ -3,6 +3,7 @@
   import MyActivities from './pages/MyActivities.svelte';
   import RoomChat from './pages/RoomChat.svelte';
   import AdminPage from './pages/Admin.svelte';
+  import { logAction } from './lib/debugLog.js';
 
   function getRoute() {
     const path = window.location.pathname;
@@ -17,7 +18,9 @@
   $effect(() => {
     const onNav = () => {
       route = getRoute();
+      logAction('App', 'navigation', { route, path: window.location.pathname });
     };
+    logAction('App', 'initial route', { route, path: window.location.pathname });
     window.addEventListener('popstate', onNav);
     return () => window.removeEventListener('popstate', onNav);
   });

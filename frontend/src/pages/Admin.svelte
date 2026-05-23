@@ -4,6 +4,7 @@
   import ParticipantPicker from '../lib/ParticipantPicker.svelte';
   import { CreateChatForm, CreateParticipantForm, JoinChatForm } from '../lib/fields/index.js';
   import { touchForm } from '../lib/fields/reactive.js';
+  import { logAction, logError } from '../lib/debugLog.js';
 
   let isLoggedIn = $state(false);
   let authReady = $state(false);
@@ -34,8 +35,10 @@
   });
 
   async function refresh() {
+    logAction('Admin', 'refresh lists');
     chats = await adminFetch('/chats');
     participants = await adminFetch('/participants');
+    logAction('Admin', 'refresh done', { chats: chats.length, participants: participants.length });
     participantForm.roomIds.setDefault(chats.map((c) => c.id));
     participantForm = touchForm(participantForm);
     refreshUi();
@@ -47,19 +50,24 @@
     const err = chatForm.firstError();
     if (err) {
       error = err;
+      logAction('Admin', 'createChat blocked', { error: err });
       return;
     }
+    const payload = chatForm.toJSON();
+    logAction('Admin', 'createChat', payload);
     loading = true;
     try {
       await adminFetch('/chats', {
         method: 'POST',
-        body: JSON.stringify(chatForm.toJSON()),
+        body: JSON.stringify(payload),
       });
+      logAction('Admin', 'createChat success', { name: payload.name });
       success = 'Salon créé';
       chatForm.reset();
       chatForm = touchForm(chatForm);
       await refresh();
     } catch (e) {
+      logError('Admin', 'createChat', e);
       error = e.message;
     } finally {
       loading = false;
@@ -79,9 +87,15 @@
     const err = participantForm.firstError();
     if (err) {
       error = err;
+      logAction('Admin', 'createParticipant blocked', { error: err });
       return;
     }
 
+    logAction('Admin', 'createParticipant', {
+      emails: pickList,
+      roomIds: participantForm.roomIds.ids,
+      sendInviteEmail: participantForm.sendInviteEmail.checked,
+    });
     loading = true;
     const summaries = [];
     try {
@@ -93,6 +107,11 @@
         const res = await adminFetch('/participants', {
           method: 'POST',
           body: JSON.stringify(payload),
+        });
+        logAction('Admin', 'createParticipant result', {
+          email: res.email,
+          merged: res.merged,
+          mail: res.mail,
         });
         lastCreatedCode = res.accessCode;
         if (res.merged) {
@@ -107,6 +126,7 @@
       participantForm = touchForm(participantForm);
       await refresh();
     } catch (e) {
+      logError('Admin', 'createParticipant', e);
       error = e.message;
     } finally {
       loading = false;
@@ -114,12 +134,14 @@
   }
 
   function toggleRoom(id) {
+    logAction('Admin', 'toggleRoom', { roomId: id });
     participantForm.roomIds.toggle(id);
     participantForm = touchForm(participantForm);
     refreshUi();
   }
 
   async function joinChat(id) {
+    logAction('Admin', 'joinChat', { chatId: id });
     loading = true;
     error = '';
     try {
@@ -135,33 +157,64 @@
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || res.statusText);
+      logAction('Admin', 'joinChat redirect', { roomUrl: data.roomUrl });
       window.location.href = data.roomUrl;
     } catch (e) {
+      logError('Admin', 'joinChat', e);
       error = e.message;
       loading = false;
     }
   }
 
   async function deleteChat(id) {
-    if (!confirm('Supprimer ce salon ?')) return;
-    await adminFetch(`/chats/${id}`, { method: 'DELETE' });
-    await refresh();
+    if (!confirm('Supprimer ce salon ?')) {
+      logAction('Admin', 'deleteChat cancelled', { chatId: id });
+      return;
+    }
+    logAction('Admin', 'deleteChat', { chatId: id });
+    try {
+      await adminFetch(`/chats/${id}`, { method: 'DELETE' });
+      logAction('Admin', 'deleteChat success', { chatId: id });
+      await refresh();
+    } catch (e) {
+      logError('Admin', 'deleteChat', e);
+      error = e.message;
+    }
   }
 
   async function extendChat(id) {
-    await adminFetch(`/chats/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ extend: true }),
-    });
-    await refresh();
+    logAction('Admin', 'extendChat', { chatId: id });
+    try {
+      await adminFetch(`/chats/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ extend: true }),
+      });
+      logAction('Admin', 'extendChat success', { chatId: id });
+      await refresh();
+    } catch (e) {
+      logError('Admin', 'extendChat', e);
+      error = e.message;
+    }
   }
 
   async function resendInvite(id) {
-    await adminFetch(`/participants/${id}/send-invite`, { method: 'POST' });
-    success = 'Invitation renvoyée (ou voir logs)';
+    logAction('Admin', 'resendInvite', { participantId: id });
+    try {
+      const mailResult = await adminFetch(`/participants/${id}/send-invite`, { method: 'POST' });
+      logAction('Admin', 'resendInvite result', mailResult);
+    success = mailResult.sent
+      ? 'Invitation envoyée par email'
+      : mailResult.skipped
+        ? 'Email non envoyé (SMTP non configuré — voir logs serveur)'
+        : 'Invitation renvoyée';
+    } catch (e) {
+      logError('Admin', 'resendInvite', e);
+      error = e.message;
+    }
   }
 
   async function logout() {
+    logAction('Admin', 'logout');
     setAdminToken(null);
     try {
       await authFetch('/logout', { method: 'POST' });
@@ -172,9 +225,11 @@
   }
 
   onMount(async () => {
+    logAction('Admin', 'page mount');
     try {
       const session = await authFetch('/session');
       if (session.role === 'admin') {
+        logAction('Admin', 'session admin OK');
         isLoggedIn = true;
         await refresh();
         authReady = true;
@@ -195,6 +250,11 @@
     }
     location.replace('/?mode=admin');
   });
+
+  function setTab(next) {
+    logAction('Admin', 'change tab', { tab: next });
+    tab = next;
+  }
 </script>
 
 <div class="admin">
@@ -208,8 +268,8 @@
     <p class="muted center">Chargement…</p>
   {:else if isLoggedIn}
     <nav class="tabs">
-      <button class:active={tab === 'salons'} onclick={() => (tab = 'salons')}>Salons</button>
-      <button class:active={tab === 'personnes'} onclick={() => (tab = 'personnes')}>Personnes</button>
+      <button class:active={tab === 'salons'} onclick={() => setTab('salons')}>Salons</button>
+      <button class:active={tab === 'personnes'} onclick={() => setTab('personnes')}>Personnes</button>
     </nav>
 
     {#if error}<p class="err banner">{error}</p>{/if}

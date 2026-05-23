@@ -9,6 +9,7 @@
     InviteInRoomForm,
   } from '../lib/fields/index.js';
   import { touchForm } from '../lib/fields/reactive.js';
+  import { logAction, logError } from '../lib/debugLog.js';
 
   let roomId = $state('');
   let isAdmin = $state(!!getAdminToken());
@@ -50,6 +51,7 @@
   }
 
   async function loadProfile(id) {
+    logAction('RoomChat', 'loadProfile', { roomId: id });
     profile = await roomFetch(id, '/profile');
     if (!profile.displayName) {
       showNamePrompt = true;
@@ -63,36 +65,49 @@
     const err = nameForm.firstError();
     if (err) {
       error = err;
+      logAction('RoomChat', 'saveName blocked', { error: err });
       return;
     }
-    await roomFetch(roomId, '/set-name', {
-      method: 'POST',
-      body: JSON.stringify(nameForm.toJSON()),
-    });
-    profile.displayName = nameForm.displayName.value;
-    showNamePrompt = false;
-    await connectSocket();
+    logAction('RoomChat', 'saveName', nameForm.toJSON());
+    try {
+      await roomFetch(roomId, '/set-name', {
+        method: 'POST',
+        body: JSON.stringify(nameForm.toJSON()),
+      });
+      logAction('RoomChat', 'saveName success');
+      profile.displayName = nameForm.displayName.value;
+      showNamePrompt = false;
+      await connectSocket();
+    } catch (e) {
+      logError('RoomChat', 'saveName', e);
+      error = e.message;
+    }
   }
 
   async function loadMembers() {
     if (!isAdmin || !roomId) return;
+    logAction('RoomChat', 'loadMembers', { roomId });
     try {
       members = await adminFetch(`/chats/${roomId}/members`);
-    } catch {
+    } catch (e) {
+      logError('RoomChat', 'loadMembers', e);
       members = [];
     }
   }
 
   async function loadAllParticipants() {
+    logAction('RoomChat', 'loadAllParticipants');
     try {
       allParticipants = await adminFetch('/participants');
-    } catch {
+    } catch (e) {
+      logError('RoomChat', 'loadAllParticipants', e);
       allParticipants = [];
     }
   }
 
   async function openInvite() {
     showInvite = !showInvite;
+    logAction('RoomChat', 'toggle invite panel', { open: showInvite });
     if (showInvite) {
       pickList = [];
       inviteFeedback = '';
@@ -113,14 +128,19 @@
     const err = inviteForm.firstError();
     if (err) {
       inviteFeedback = err;
+      logAction('RoomChat', 'addParticipants blocked', { error: err });
       return;
     }
+
+    const payload = inviteForm.toJSON();
+    logAction('RoomChat', 'addParticipants', payload);
 
     try {
       const res = await adminFetch(`/chats/${roomId}/add-participants`, {
         method: 'POST',
-        body: JSON.stringify(inviteForm.toJSON()),
+        body: JSON.stringify(payload),
       });
+      logAction('RoomChat', 'addParticipants results', res.results);
       const lines = res.results.map((r) => {
         if (r.isNew) return `${r.email} : nouveau, code ${r.accessCode}${r.mail?.sent ? ', email envoyé' : ''}`;
         if (r.alreadyInRoom) return `${r.email} : déjà dans le salon (code ${r.accessCode})`;
@@ -132,11 +152,13 @@
       inviteForm = touchForm(inviteForm);
       await Promise.all([loadMembers(), loadAllParticipants()]);
     } catch (e) {
+      logError('RoomChat', 'addParticipants', e);
       inviteFeedback = e.message;
     }
   }
 
   async function connectSocket() {
+    logAction('RoomChat', 'connectSocket', { roomId });
     messages = await roomFetch(roomId, '/messages');
 
     socket?.disconnect();
@@ -147,21 +169,35 @@
     });
 
     socket.on('message', (msg) => {
+      logAction('RoomChat', 'socket message received', { id: msg.id, sender: msg.senderName });
       messages = [...messages, msg];
       scrollBottom();
     });
 
     socket.on('system-message', (ev) => {
+      logAction('RoomChat', 'socket system-message', ev);
       systemLines = [...systemLines, ev];
     });
 
     socket.on('connect_error', () => {
+      logError('RoomChat', 'socket connect_error', 'Connexion temps réel impossible');
       error = 'Connexion temps réel impossible — rechargez la page';
+    });
+
+    socket.on('connect', () => {
+      logAction('RoomChat', 'socket connected');
     });
   }
 
   function sendMessage() {
-    if (!messageField.isValid || !socket?.connected) return;
+    if (!messageField.isValid || !socket?.connected) {
+      logAction('RoomChat', 'sendMessage blocked', {
+        valid: messageField.isValid,
+        connected: socket?.connected,
+      });
+      return;
+    }
+    logAction('RoomChat', 'sendMessage', { length: messageField.value.length });
     socket.emit('message', messageField.toSocketPayload());
     messageField.reset();
     messageField = touchForm(messageField);
@@ -176,6 +212,7 @@
 
   onMount(() => {
     roomId = getRoomId();
+    logAction('RoomChat', 'page mount', { roomId, isAdmin });
     if (!roomId) {
       error = 'Salon introuvable';
       return;
@@ -189,6 +226,7 @@
         }
       })
       .catch((e) => {
+        logError('RoomChat', 'init', e);
         if (e.message.includes('connecté') || e.message.includes('Session')) {
           location.href = '/';
         } else {
