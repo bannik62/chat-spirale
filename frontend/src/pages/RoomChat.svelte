@@ -246,6 +246,9 @@
     fetchRoomContext()
       .then((ctx) => {
         isAdmin = ctx.isFormateur;
+        if (ctx._legacyBackend) {
+          logAction('RoomChat', 'legacy backend — isFormateur=false, rebuild backend');
+        }
         logAction('RoomChat', 'page mount', { roomId, isAdmin });
         return loadProfile(roomId);
       })

@@ -24,6 +24,84 @@
   let chats = $state([]);
   let participants = $state([]);
   let lastCreatedCode = $state('');
+  /** @type {Record<string, string[]>} */
+  let roomEdits = $state({});
+
+  function syncRoomEdits() {
+    const next = {};
+    for (const p of participants) {
+      if (!p.isRevoked) {
+        next[p.id] = [...(p.chatRoomIds || [])];
+      }
+    }
+    roomEdits = next;
+  }
+
+  function activeParticipants() {
+    return participants.filter((p) => !p.isRevoked);
+  }
+
+  function toggleParticipantRoom(participantId, chatId) {
+    const ids = roomEdits[participantId] || [];
+    roomEdits = {
+      ...roomEdits,
+      [participantId]: ids.includes(chatId)
+        ? ids.filter((x) => x !== chatId)
+        : [...ids, chatId],
+    };
+    logAction('Admin', 'toggleParticipantRoom', { participantId, chatId });
+  }
+
+  function participantRoomsDirty(p) {
+    const current = roomEdits[p.id] || [];
+    const original = p.chatRoomIds || [];
+    if (current.length !== original.length) return true;
+    return current.some((id) => !original.includes(id));
+  }
+
+  async function saveParticipantRooms(p) {
+    const chatRoomIds = roomEdits[p.id] || [];
+    if (chatRoomIds.length === 0) {
+      error = "Au moins un salon requis — utilisez « Révoquer » pour retirer l'accès.";
+      return;
+    }
+    error = '';
+    logAction('Admin', 'saveParticipantRooms', { participantId: p.id, chatRoomIds });
+    loading = true;
+    try {
+      await adminFetch(`/participants/${p.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ chatRoomIds }),
+      });
+      success = `Accès mis à jour pour ${p.email}`;
+      await refresh();
+    } catch (e) {
+      logError('Admin', 'saveParticipantRooms', e);
+      error = e.message;
+    } finally {
+      loading = false;
+    }
+  }
+
+  async function revokeParticipant(p) {
+    if (!confirm(`Révoquer l'accès de ${p.email} ?\nLa personne ne pourra plus se connecter.`)) {
+      logAction('Admin', 'revokeParticipant cancelled', { participantId: p.id });
+      return;
+    }
+    logAction('Admin', 'revokeParticipant', { participantId: p.id, email: p.email });
+    loading = true;
+    error = '';
+    try {
+      await adminFetch(`/participants/${p.id}`, { method: 'DELETE' });
+      success = `${p.email} révoqué(e)`;
+      await refresh();
+    } catch (e) {
+      logError('Admin', 'revokeParticipant', e);
+      error = e.message;
+    } finally {
+      loading = false;
+    }
+  }
 
   function refreshUi() {
     tick++;
@@ -48,6 +126,7 @@
     chats = await adminFetch('/chats');
     participants = await adminFetch('/participants');
     logAction('Admin', 'refresh done', { chats: chats.length, participants: participants.length });
+    syncRoomEdits();
     participantForm.roomIds.setDefault(chats.map((c) => c.id));
     participantForm = touchForm(participantForm);
     refreshUi();
@@ -239,11 +318,11 @@
     try {
       const mailResult = await adminFetch(`/participants/${id}/send-invite`, { method: 'POST' });
       logAction('Admin', 'resendInvite result', mailResult);
-    success = mailResult.sent
-      ? 'Invitation envoyée par email'
-      : mailResult.skipped
-        ? 'Email non envoyé (SMTP non configuré — voir logs serveur)'
-        : 'Invitation renvoyée';
+      success = mailResult.sent
+        ? 'Invitation envoyée par email'
+        : mailResult.skipped
+          ? 'Email non envoyé (SMTP non configuré — voir logs serveur)'
+          : 'Invitation renvoyée';
     } catch (e) {
       logError('Admin', 'resendInvite', e);
       error = e.message;
@@ -362,10 +441,64 @@
       </section>
     {:else}
       <section class="card">
-        <h2>Ajouter une personne</h2>
+        <h2>Personnes inscrites</h2>
         <p class="muted">
-          Cochez les salons à ajouter. Personne déjà inscrite : <strong>même code</strong>,
-          pas d'email automatique (utilisez « Renvoyer mail » dans la liste si besoin).
+          Cochez les salons autorisés pour chaque personne, puis « Enregistrer ».
+          Pour ajouter quelqu'un à un salon en direct, utilisez « + Inviter » depuis le chat.
+        </p>
+        {#if activeParticipants().length === 0}
+          <p class="muted">Aucune personne active.</p>
+        {:else}
+          <ul class="list person-list">
+            {#each activeParticipants() as p}
+              <li class="person">
+                <div class="person-main">
+                  <strong>{p.email}</strong>
+                  <span class="code">Code : {p.accessCode}</span>
+                  <fieldset class="person-rooms">
+                    <legend>Salons autorisés</legend>
+                    {#if chats.length === 0}
+                      <p class="muted">Aucun salon créé.</p>
+                    {:else}
+                      {#each chats as chat}
+                        <label class="row">
+                          <input
+                            type="checkbox"
+                            checked={(roomEdits[p.id] || []).includes(chat.id)}
+                            onchange={() => toggleParticipantRoom(p.id, chat.id)}
+                          />
+                          {chat.name}
+                        </label>
+                      {/each}
+                    {/if}
+                  </fieldset>
+                </div>
+                <div class="actions person-actions">
+                  <button
+                    class="save-access"
+                    onclick={() => saveParticipantRooms(p)}
+                    disabled={loading || !participantRoomsDirty(p) || (roomEdits[p.id] || []).length === 0}
+                  >
+                    Enregistrer
+                  </button>
+                  <button class="ghost" onclick={() => resendInvite(p.id)} disabled={loading}>
+                    Renvoyer mail
+                  </button>
+                  <button class="danger" onclick={() => revokeParticipant(p)} disabled={loading}>
+                    Révoquer
+                  </button>
+                </div>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </section>
+
+      <details class="card add-person-details">
+        <summary>Ajouter une personne (optionnel — multi-salons)</summary>
+        <p class="muted">
+          Alternative à « + Inviter » dans un chat. Personne déjà inscrite : <strong>même code</strong>,
+          pas d'email automatique (utilisez « Renvoyer mail » ci-dessus si besoin).
         </p>
         <ParticipantPicker
           bind:this={participantPicker}
@@ -409,33 +542,7 @@
         {#if lastCreatedCode}
           <p class="code-display">Code : <strong>{lastCreatedCode}</strong></p>
         {/if}
-      </section>
-
-      <section class="card">
-        <h2>Personnes inscrites</h2>
-        {#if participants.length === 0}
-          <p class="muted">Aucune personne.</p>
-        {:else}
-          <ul class="list">
-            {#each participants as p}
-              <li class="person">
-                <div>
-                  <strong>{p.email}</strong>
-                  <span class="code">Code : {p.accessCode}</span>
-                  <span class="muted">
-                    {#each p.rooms as r, i}
-                      {r.name}{i < p.rooms.length - 1 ? ' · ' : ''}
-                    {/each}
-                  </span>
-                </div>
-                <div class="actions">
-                  <button class="ghost" onclick={() => resendInvite(p.id)}>Renvoyer mail</button>
-                </div>
-              </li>
-            {/each}
-          </ul>
-        {/if}
-      </section>
+      </details>
     {/if}
   {/if}
 </div>
@@ -603,8 +710,59 @@
     display: block;
     font-family: ui-monospace, monospace;
     font-size: 0.9rem;
-    margin: 0.25rem 0;
+    margin: 0.25rem 0 0.75rem;
     color: var(--accent-hover);
+  }
+
+  .person-list .person {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+  }
+
+  .person-main {
+    flex: 1;
+  }
+
+  .person-rooms {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    margin: 0;
+  }
+
+  .person-rooms legend {
+    padding: 0 0.25rem;
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+
+  .person-actions {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  .save-access {
+    background: var(--accent);
+    color: white;
+    border: none;
+    padding: 0.4rem 0.75rem;
+    border-radius: 6px;
+    font-weight: 600;
+  }
+
+  .save-access:disabled {
+    opacity: 0.5;
+  }
+
+  .add-person-details summary {
+    cursor: pointer;
+    font-weight: 600;
+    margin-bottom: 0.75rem;
+  }
+
+  .add-person-details[open] summary {
+    margin-bottom: 1rem;
   }
 
   .code-display {

@@ -142,6 +142,11 @@ export async function fetchRoomContext() {
   });
   const data = await parseResponse(res);
 
+  if (res.status === 404) {
+    logApiErr('GET', '/auth/room-context', 'Route absente — redémarrez le backend');
+    return { email: '', isFormateur: false, _legacyBackend: true };
+  }
+
   if (!res.ok) {
     logApiErr('GET', '/auth/room-context', data.error || res.statusText);
     throw new Error(data.error || res.statusText);
