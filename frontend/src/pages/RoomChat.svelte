@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { io } from 'socket.io-client';
-  import { roomFetch, adminFetch, getAdminToken } from '../lib/api.js';
+  import { roomFetch, adminFetch, fetchRoomContext } from '../lib/api.js';
   import { logoutToLogin } from '../lib/logout.js';
   import { navigate } from '../lib/navigate.js';
   import ParticipantPicker from '../lib/ParticipantPicker.svelte';
@@ -14,7 +14,7 @@
   import { logAction, logError } from '../lib/debugLog.js';
 
   let roomId = $state('');
-  let isAdmin = $state(!!getAdminToken());
+  let isAdmin = $state(false);
   let showInvite = $state(false);
   let pickList = $state([]);
   let invitePicker = $state(null);
@@ -238,13 +238,17 @@
 
   onMount(() => {
     roomId = getRoomId();
-    logAction('RoomChat', 'page mount', { roomId, isAdmin });
     if (!roomId) {
       error = 'Salon introuvable';
       return;
     }
 
-    loadProfile(roomId)
+    fetchRoomContext()
+      .then((ctx) => {
+        isAdmin = ctx.isFormateur;
+        logAction('RoomChat', 'page mount', { roomId, isAdmin });
+        return loadProfile(roomId);
+      })
       .then((ok) => {
         if (ok) {
           if (isAdmin) loadMembers();

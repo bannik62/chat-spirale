@@ -1,4 +1,4 @@
-import { authFetch, setAdminToken } from './api.js';
+import { sessionFetch, setAdminToken } from './api.js';
 import { logAction } from './debugLog.js';
 import { navigate } from './navigate.js';
 
@@ -7,7 +7,7 @@ export async function logoutToLogin({ replace = false } = {}) {
   logAction('Auth', 'logout');
   setAdminToken(null);
   try {
-    await authFetch('/logout', { method: 'POST' });
+    await sessionFetch('/logout', { method: 'POST' });
   } catch {
     /* cookie déjà absent */
   }

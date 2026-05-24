@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import { authFetch } from '../lib/api.js';
+  import { sessionFetch } from '../lib/api.js';
   import { logAction, logError } from '../lib/debugLog.js';
   import { logoutToLogin } from '../lib/logout.js';
   import { navigate } from '../lib/navigate.js';
@@ -13,7 +13,7 @@
   onMount(async () => {
     logAction('MyActivities', 'page mount');
     try {
-      const data = await authFetch('/me');
+      const data = await sessionFetch('/me');
       email = data.email;
       rooms = data.rooms;
       logAction('MyActivities', 'loaded', { email, roomCount: rooms.length });

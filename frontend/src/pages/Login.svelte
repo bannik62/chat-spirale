@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import { authFetch, setAdminToken } from '../lib/api.js';
+  import { adminSessionFetch, sessionFetch, getAdminToken, setAdminToken } from '../lib/api.js';
   import { PortalLoginForm } from '../lib/fields/index.js';
   import { touchForm } from '../lib/fields/reactive.js';
   import { logAction, logError, logApi, logApiOk, logApiErr } from '../lib/debugLog.js';
@@ -30,7 +30,9 @@
     }
 
     try {
-      const session = await authFetch('/session');
+      const session = getAdminToken()
+        ? await adminSessionFetch('/session')
+        : await sessionFetch('/session');
       logAction('Login', 'session check', { role: session.role });
       if (session.role === 'admin') {
         location.replace('/admin');
@@ -87,6 +89,7 @@
         return;
       }
 
+      setAdminToken(null);
       location.href = '/mes-activites';
     } catch (e) {
       logError('Login', 'submit', e);

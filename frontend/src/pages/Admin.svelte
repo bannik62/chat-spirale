@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import { adminFetch, authFetch, getAdminToken, setAdminToken } from '../lib/api.js';
+  import { adminFetch, adminSessionFetch, getAdminToken, setAdminToken } from '../lib/api.js';
   import { logoutToLogin } from '../lib/logout.js';
   import ParticipantPicker from '../lib/ParticipantPicker.svelte';
   import { CreateChatForm, CreateParticipantForm, JoinChatForm } from '../lib/fields/index.js';
@@ -258,7 +258,7 @@
   onMount(async () => {
     logAction('Admin', 'page mount');
     try {
-      const session = await authFetch('/session');
+      const session = await adminSessionFetch('/session');
       if (session.role === 'admin') {
         logAction('Admin', 'session admin OK');
         isLoggedIn = true;
