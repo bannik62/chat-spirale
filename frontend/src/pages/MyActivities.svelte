@@ -15,11 +15,6 @@
       email = data.email;
       rooms = data.rooms;
       logAction('MyActivities', 'loaded', { email, roomCount: rooms.length });
-      if (rooms.length === 1) {
-        logAction('MyActivities', 'redirect single room', { roomId: rooms[0].id });
-        location.replace(`/salon/${rooms[0].id}`);
-        return;
-      }
       if (rooms.length === 0) {
         error = 'Aucune activité accessible';
       }

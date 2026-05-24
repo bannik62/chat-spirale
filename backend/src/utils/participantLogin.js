@@ -32,6 +32,6 @@ export async function verifyParticipantCredentials(email, code) {
 }
 
 export function participantRedirect(rooms) {
-  if (rooms.length === 1) return `/salon/${rooms[0].id}`;
+  if (rooms.length === 0) return '/';
   return '/mes-activites';
 }
