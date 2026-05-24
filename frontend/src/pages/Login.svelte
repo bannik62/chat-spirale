@@ -36,8 +36,8 @@
         location.replace('/admin');
         return;
       }
-      if (session.role === 'participant' && session.redirect) {
-        location.replace(session.redirect);
+      if (session.role === 'participant') {
+        location.replace('/mes-activites');
         return;
       }
     } catch {
@@ -87,7 +87,7 @@
         return;
       }
 
-      location.href = data.redirect || '/mes-activites';
+      location.href = '/mes-activites';
     } catch (e) {
       logError('Login', 'submit', e);
       error = e.message;

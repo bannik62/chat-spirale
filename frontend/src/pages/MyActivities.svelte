@@ -1,7 +1,9 @@
 <script>
   import { onMount } from 'svelte';
-  import { authFetch, setAdminToken } from '../lib/api.js';
+  import { authFetch } from '../lib/api.js';
   import { logAction, logError } from '../lib/debugLog.js';
+  import { logoutToLogin } from '../lib/logout.js';
+  import { navigate } from '../lib/navigate.js';
 
   let email = $state('');
   let rooms = $state([]);
@@ -20,21 +22,23 @@
       }
     } catch (e) {
       logError('MyActivities', 'load', e);
-      location.href = '/';
+      error = 'Session expirée — reconnectez-vous.';
     } finally {
       loading = false;
     }
   });
 
   async function logout() {
-    logAction('MyActivities', 'logout');
-    setAdminToken(null);
-    await authFetch('/logout', { method: 'POST' });
-    location.href = '/';
+    await logoutToLogin();
   }
 
   function openRoom(room) {
     logAction('MyActivities', 'open room', { roomId: room.id, name: room.name });
+    navigate(`/salon/${room.id}`);
+  }
+
+  function goLogin() {
+    logoutToLogin();
   }
 </script>
 
@@ -50,11 +54,14 @@
   {#if loading}
     <p class="muted center">Chargement…</p>
   {:else if error}
-    <p class="err center">{error}</p>
+    <div class="center">
+      <p class="err">{error}</p>
+      <button class="ghost" onclick={goLogin}>Se connecter</button>
+    </div>
   {:else}
     <div class="buttons">
       {#each rooms as room}
-        <a class="room-btn" href="/salon/{room.id}" onclick={() => openRoom(room)}>
+        <a class="room-btn" href="/salon/{room.id}" onclick={(e) => { e.preventDefault(); openRoom(room); }}>
           <span class="room-name">{room.name}</span>
           {#if room.displayName}
             <span class="room-you">Connecté comme {room.displayName}</span>

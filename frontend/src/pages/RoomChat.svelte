@@ -2,6 +2,8 @@
   import { onMount } from 'svelte';
   import { io } from 'socket.io-client';
   import { roomFetch, adminFetch, getAdminToken } from '../lib/api.js';
+  import { logoutToLogin } from '../lib/logout.js';
+  import { navigate } from '../lib/navigate.js';
   import ParticipantPicker from '../lib/ParticipantPicker.svelte';
   import {
     SetDisplayNameForm,
@@ -224,6 +226,16 @@
     });
   }
 
+  async function logout() {
+    socket?.disconnect();
+    await logoutToLogin();
+  }
+
+  function goActivities() {
+    logAction('RoomChat', 'go activities');
+    navigate('/mes-activites');
+  }
+
   onMount(() => {
     roomId = getRoomId();
     logAction('RoomChat', 'page mount', { roomId, isAdmin });
@@ -295,7 +307,8 @@
           </button>
           <a class="back" href="/admin">Admin</a>
         {/if}
-        <a class="back" href="/mes-activites">Activités</a>
+        <a class="back" href="/mes-activites" onclick={(e) => { e.preventDefault(); goActivities(); }}>Activités</a>
+        <button type="button" class="back logout-btn" onclick={logout}>Déconnexion</button>
       </div>
     </header>
 
@@ -415,6 +428,18 @@
     color: var(--muted);
     text-decoration: none;
     white-space: nowrap;
+  }
+
+  .logout-btn {
+    background: transparent;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    font: inherit;
+  }
+
+  .logout-btn:hover {
+    color: var(--text);
   }
 
   .invite-toggle {

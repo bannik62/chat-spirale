@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { adminFetch, authFetch, getAdminToken, setAdminToken } from '../lib/api.js';
+  import { logoutToLogin } from '../lib/logout.js';
   import ParticipantPicker from '../lib/ParticipantPicker.svelte';
   import { CreateChatForm, CreateParticipantForm, JoinChatForm } from '../lib/fields/index.js';
   import { touchForm } from '../lib/fields/reactive.js';
@@ -251,13 +252,7 @@
 
   async function logout() {
     logAction('Admin', 'logout');
-    setAdminToken(null);
-    try {
-      await authFetch('/logout', { method: 'POST' });
-    } catch {
-      /* ignore */
-    }
-    location.href = '/';
+    await logoutToLogin();
   }
 
   onMount(async () => {

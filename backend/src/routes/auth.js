@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken';
 import { SESSION_COOKIE } from '../middleware/participantAuth.js';
 import { issueParticipantSession } from '../utils/participantSession.js';
 import { verifyAdminCredentials, createAdminJwt, getAdminFromRequest } from '../utils/adminLogin.js';
-import { verifyParticipantCredentials, participantRedirect } from '../utils/participantLogin.js';
+import { verifyParticipantCredentials } from '../utils/participantLogin.js';
 import { roomsForParticipant } from '../utils/roomsForParticipant.js';
 import { adminCookieOptions, sessionCookieOptions } from '../middleware/security.js';
 
@@ -53,7 +53,7 @@ router.post('/portal-login', async (req, res) => {
   return res.json({
     role: 'participant',
     email: result.participant.email,
-    redirect: participantRedirect(result.rooms),
+    redirect: '/mes-activites',
     rooms: result.rooms,
   });
 });
@@ -82,7 +82,7 @@ router.get('/session', async (req, res) => {
     return res.json({
       role: 'participant',
       email: payload.email,
-      redirect: participantRedirect(rooms),
+      redirect: '/mes-activites',
       rooms,
     });
   } catch {
@@ -104,7 +104,7 @@ router.post('/login', async (req, res) => {
     role: 'participant',
     email: result.participant.email,
     rooms: result.rooms,
-    redirect: participantRedirect(result.rooms),
+    redirect: '/mes-activites',
   });
 });
 
