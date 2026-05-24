@@ -3,6 +3,12 @@ import rateLimit from 'express-rate-limit';
 
 const isProd = process.env.NODE_ENV === 'production';
 
+function parseRateLimitMax(envValue, fallbackProd, fallbackDev) {
+  const n = Number(envValue);
+  if (Number.isFinite(n) && n > 0) return Math.floor(n);
+  return isProd ? fallbackProd : fallbackDev;
+}
+
 /** Origines autorisées (CORS + Socket.IO). */
 export function getAllowedOrigins() {
   const origins = new Set();
@@ -46,15 +52,18 @@ export const securityHeaders = helmet({
     : false,
 });
 
-/** Brute force login / codes */
-export const authRateLimiter = rateLimit({
+/** Anti brute-force — uniquement POST login (portal-login, login). */
+export const loginRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: isProd ? 20 : 100,
+  max: parseRateLimitMax(process.env.AUTH_RATE_LIMIT_MAX, 100, 100),
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Trop de tentatives. Réessayez dans 15 minutes.' },
   skip: () => !isProd && process.env.RATE_LIMIT_OFF === '1',
 });
+
+/** @deprecated Utiliser loginRateLimiter sur les routes POST login uniquement. */
+export const authRateLimiter = loginRateLimiter;
 
 /** Limite générale API */
 export const apiRateLimiter = rateLimit({

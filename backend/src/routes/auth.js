@@ -5,7 +5,7 @@ import { issueParticipantSession } from '../utils/participantSession.js';
 import { verifyAdminCredentials, createAdminJwt, getAdminFromRequest } from '../utils/adminLogin.js';
 import { verifyParticipantCredentials } from '../utils/participantLogin.js';
 import { roomsForParticipant } from '../utils/roomsForParticipant.js';
-import { adminCookieOptions, sessionCookieOptions } from '../middleware/security.js';
+import { adminCookieOptions, sessionCookieOptions, loginRateLimiter } from '../middleware/security.js';
 
 const router = Router();
 
@@ -14,7 +14,7 @@ function clearAdminSession(res) {
 }
 
 /** Connexion unique : mode admin (mdp) ou participant (code) → redirect selon rôle */
-router.post('/portal-login', async (req, res) => {
+router.post('/portal-login', loginRateLimiter, async (req, res) => {
   const email = String(req.body?.email || '').trim().toLowerCase();
   const mode = req.body?.mode === 'admin' ? 'admin' : 'participant';
 
@@ -110,7 +110,7 @@ router.get('/room-context', (req, res) => {
   });
 });
 
-router.post('/login', async (req, res) => {
+router.post('/login', loginRateLimiter, async (req, res) => {
   const email = String(req.body?.email || '').trim().toLowerCase();
   const result = await verifyParticipantCredentials(email, req.body?.code);
   if (result.error) {

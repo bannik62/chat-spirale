@@ -13,7 +13,6 @@ import { seedDevParticipantIfNeeded } from './utils/seedDev.js';
 import { validateProductionEnv } from './utils/validateEnv.js';
 import {
   securityHeaders,
-  authRateLimiter,
   apiRateLimiter,
   corsOriginValidator,
   getAllowedOrigins,
@@ -52,7 +51,7 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
-app.use('/api/auth', authRateLimiter, authRoutes);
+app.use('/api/auth', authRoutes);
 app.use('/api', apiRateLimiter);
 app.use('/api/rooms', roomRoutes);
 app.use('/api/admin', adminRoutes);

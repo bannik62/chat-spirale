@@ -64,6 +64,7 @@ jobs:
             printf '%s\n' "SMTP_USER=${{ secrets.SMTP_USER }}"
             printf '%s\n' "SMTP_PASS=${{ secrets.SMTP_PASS }}"
             printf '%s\n' "SPIRALE_HTTP_PORT=${{ secrets.SPIRALE_HTTP_PORT }}"
+            printf '%s\n' "AUTH_RATE_LIMIT_MAX=${{ secrets.AUTH_RATE_LIMIT_MAX }}"
           } | ssh -i ~/.ssh/spirale_deploy -p "$DEPLOY_PORT" -o StrictHostKeyChecking=accept-new \
               "$DEPLOY_USER@$DEPLOY_HOST" \
               "umask 077; cat > ${DEP}/.env.prod && chmod 600 ${DEP}/.env.prod"

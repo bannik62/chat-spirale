@@ -102,6 +102,7 @@ Frontend dev : http://localhost:5174 (proxy API vers :3000) — **5173** = yt-we
 | `DEPLOY_SSH_KEY` | Clé privée SSH |
 | `DEPLOY_PATH` | Chemin du repo sur le VPS (ex. `/opt/association-spirale`) |
 | `SPIRALE_HTTP_PORT` | Port local du conteneur (défaut `8080`, Apache proxy vers `127.0.0.1:8080`) |
+| `AUTH_RATE_LIMIT_MAX` | Tentatives login max / 15 min par IP (défaut `100`) |
 
 ## Déploiement VPS (Apache en reverse proxy)
 
