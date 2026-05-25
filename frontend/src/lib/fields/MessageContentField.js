@@ -4,11 +4,11 @@ const MAX_LEN = 4000;
 
 export class MessageContentField extends FormField {
   normalize(raw) {
-    return String(raw ?? '').trim().slice(0, MAX_LEN);
+    return String(raw ?? '').slice(0, MAX_LEN);
   }
 
   get isValid() {
-    return this.value.length > 0;
+    return this.value.trim().length > 0;
   }
 
   get error() {
@@ -18,6 +18,6 @@ export class MessageContentField extends FormField {
 
   /** Payload Socket.IO */
   toSocketPayload() {
-    return { content: this.value };
+    return { content: this.value.trim() };
   }
 }

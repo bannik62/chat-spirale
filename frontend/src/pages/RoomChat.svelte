@@ -312,9 +312,10 @@
           <button type="button" class="invite-toggle" onclick={openInvite}>
             {showInvite ? 'Fermer' : '+ Inviter'}
           </button>
-          <a class="back" href="/admin">Admin</a>
+          <a class="back" href="/admin">← Admin</a>
+        {:else}
+          <a class="back" href="/mes-activites" onclick={(e) => { e.preventDefault(); goActivities(); }}>Activités</a>
         {/if}
-        <a class="back" href="/mes-activites" onclick={(e) => { e.preventDefault(); goActivities(); }}>Activités</a>
         <button type="button" class="back logout-btn" onclick={logout}>Déconnexion</button>
       </div>
     </header>
