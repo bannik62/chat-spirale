@@ -1,5 +1,5 @@
 import { prisma } from './prisma.js';
-import { activeRoomWhere, generateUniqueAccessCode } from './accessCode.js';
+import { activeRoomWhere } from './accessCode.js';
 
 export function getFormateurEmail() {
   return process.env.ADMIN_EMAIL?.trim().toLowerCase() || null;
@@ -13,8 +13,7 @@ export function isFormateurEmail(email) {
 }
 
 /**
- * Compte participant technique pour le chat + accès à tous les salons actifs.
- * Invisible dans la liste « Personnes » (filtré côté API).
+ * Profil chat du formateur : accès à tous les salons actifs, sans code participant.
  */
 export async function syncFormateurAllRooms(adminEmail) {
   const email = adminEmail.trim().toLowerCase();
@@ -22,24 +21,23 @@ export async function syncFormateurAllRooms(adminEmail) {
 
   let participant = await prisma.participant.findUnique({ where: { email } });
   if (!participant) {
-    const accessCode = await generateUniqueAccessCode();
     participant = await prisma.participant.create({
-      data: { email, accessCode, displayName: defaultName },
+      data: { email, accessCode: null, displayName: defaultName },
     });
-  } else if (participant.isRevoked) {
-    participant = await prisma.participant.update({
-      where: { id: participant.id },
-      data: { isRevoked: false },
-    });
+  } else {
+    const updates = {};
+    if (participant.isRevoked) updates.isRevoked = false;
+    if (participant.accessCode != null) updates.accessCode = null;
+    if (!participant.displayName) updates.displayName = defaultName;
+    if (Object.keys(updates).length > 0) {
+      participant = await prisma.participant.update({
+        where: { id: participant.id },
+        data: updates,
+      });
+    }
   }
 
   const displayName = participant.displayName || defaultName;
-  if (!participant.displayName) {
-    participant = await prisma.participant.update({
-      where: { id: participant.id },
-      data: { displayName },
-    });
-  }
 
   const rooms = await prisma.chatRoom.findMany({
     where: activeRoomWhere(),

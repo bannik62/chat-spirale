@@ -1,6 +1,7 @@
 import { prisma } from './prisma.js';
 import { normalizeAccessCode } from './accessCode.js';
 import { roomsForParticipant } from './roomsForParticipant.js';
+import { isFormateurEmail } from './formateurAccess.js';
 
 export async function verifyParticipantCredentials(email, code) {
   const normalized = String(email || '').trim().toLowerCase();
@@ -8,6 +9,10 @@ export async function verifyParticipantCredentials(email, code) {
 
   if (!normalized.includes('@') || accessCode.length < 7) {
     return { error: 'Email ou code invalide' };
+  }
+
+  if (isFormateurEmail(normalized)) {
+    return { error: 'Connexion formateur : utilisez l’onglet Formateur et votre mot de passe' };
   }
 
   const participant = await prisma.participant.findFirst({

@@ -17,6 +17,11 @@ function getTransporter() {
 }
 
 export async function sendInvitationEmail({ to, accessCode, siteUrl }) {
+  if (!accessCode) {
+    console.warn('[mail] Pas de code participant — invitation non envoyée à', to);
+    return { skipped: true };
+  }
+
   const from = process.env.SMTP_USER;
   const url = siteUrl || process.env.FRONTEND_URL || 'http://localhost:8081';
 
