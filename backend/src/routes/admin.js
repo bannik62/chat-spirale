@@ -8,8 +8,18 @@ import { generateUniqueAccessCode } from '../utils/accessCode.js';
 import { sendInvitationEmail } from '../mail/sendInvitation.js';
 import { issueParticipantSession } from '../utils/participantSession.js';
 import { addParticipantToRooms } from '../utils/addParticipantAccess.js';
+import {
+  getFormateurEmail,
+  isFormateurEmail,
+  isFormateurParticipant,
+  syncFormateurAllRooms,
+} from '../utils/formateurAccess.js';
 
 const router = Router();
+
+function formateurForbidden() {
+  return { status: 403, error: 'Le compte formateur ne se gère pas ici.' };
+}
 
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
@@ -33,14 +43,25 @@ router.post('/login', async (req, res) => {
 
 router.use(adminAuth);
 
-router.get('/chats', async (_req, res) => {
+router.get('/chats', async (req, res) => {
+  await syncFormateurAllRooms(req.admin.email);
+
   const chats = await prisma.chatRoom.findMany({
     orderBy: { createdAt: 'desc' },
     include: {
       _count: { select: { memberships: true, messages: true } },
     },
   });
-  res.json(chats);
+
+  res.json(
+    chats.map((chat) => ({
+      ...chat,
+      _count: {
+        ...chat._count,
+        memberships: Math.max(0, chat._count.memberships - 1),
+      },
+    }))
+  );
 });
 
 router.post('/chats', async (req, res) => {
@@ -53,6 +74,8 @@ router.post('/chats', async (req, res) => {
   const chat = await prisma.chatRoom.create({
     data: { name: name.trim(), expiresAt },
   });
+
+  await syncFormateurAllRooms(req.admin.email);
 
   res.status(201).json(chat);
 });
@@ -77,8 +100,12 @@ router.delete('/chats/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
-router.get('/participants', async (_req, res) => {
+router.get('/participants', async (req, res) => {
+  await syncFormateurAllRooms(req.admin.email);
+
+  const formateurEmail = getFormateurEmail();
   const participants = await prisma.participant.findMany({
+    ...(formateurEmail ? { where: { email: { not: formateurEmail } } } : {}),
     orderBy: { createdAt: 'desc' },
     include: {
       memberships: {
@@ -110,6 +137,10 @@ router.post('/participants', async (req, res) => {
 
   if (!email.includes('@') || chatRoomIds.length === 0) {
     return res.status(400).json({ error: 'Email et au moins un salon requis' });
+  }
+
+  if (isFormateurEmail(email)) {
+    return res.status(403).json({ error: formateurForbidden().error });
   }
 
   const isNew = !(await prisma.participant.findUnique({ where: { email } }));
@@ -157,10 +188,10 @@ router.post('/chats/:id/add-participants', async (req, res) => {
     ...new Set(
       raw.map((e) => String(e).trim().toLowerCase()).filter((e) => e.includes('@'))
     ),
-  ];
+  ].filter((e) => !isFormateurEmail(e));
 
   if (emails.length === 0) {
-    return res.status(400).json({ error: 'Au moins un email valide' });
+    return res.status(400).json({ error: 'Au moins un email valide (hors formateur)' });
   }
 
   const sendEmailForNew = req.body?.sendEmailForNew !== false;
@@ -195,7 +226,9 @@ router.get('/chats/:id/members', async (req, res) => {
   });
 
   res.json(
-    memberships.map((m) => ({
+    memberships
+      .filter((m) => !isFormateurParticipant(m.participant))
+      .map((m) => ({
       id: m.id,
       email: m.participant.email,
       displayName: m.displayName,
@@ -216,6 +249,9 @@ router.patch('/participants/:id', async (req, res) => {
     where: { id: req.params.id },
   });
   if (!participant) return res.status(404).json({ error: 'Personne introuvable' });
+  if (isFormateurParticipant(participant)) {
+    return res.status(403).json({ error: formateurForbidden().error });
+  }
 
   for (const chatRoomId of chatRoomIds) {
     await prisma.roomMembership.upsert({
@@ -241,6 +277,12 @@ router.patch('/participants/:id', async (req, res) => {
 });
 
 router.post('/participants/:id/regenerate-code', async (req, res) => {
+  const existing = await prisma.participant.findUnique({ where: { id: req.params.id } });
+  if (!existing) return res.status(404).json({ error: 'Personne introuvable' });
+  if (isFormateurParticipant(existing)) {
+    return res.status(403).json({ error: formateurForbidden().error });
+  }
+
   const accessCode = await generateUniqueAccessCode();
   const participant = await prisma.participant.update({
     where: { id: req.params.id },
@@ -254,6 +296,9 @@ router.post('/participants/:id/send-invite', async (req, res) => {
     where: { id: req.params.id },
   });
   if (!participant) return res.status(404).json({ error: 'Personne introuvable' });
+  if (isFormateurParticipant(participant)) {
+    return res.status(403).json({ error: formateurForbidden().error });
+  }
 
   const mailResult = await sendInvitationEmail({
     to: participant.email,
@@ -263,6 +308,12 @@ router.post('/participants/:id/send-invite', async (req, res) => {
 });
 
 router.delete('/participants/:id', async (req, res) => {
+  const participant = await prisma.participant.findUnique({ where: { id: req.params.id } });
+  if (!participant) return res.status(404).json({ error: 'Personne introuvable' });
+  if (isFormateurParticipant(participant)) {
+    return res.status(403).json({ error: formateurForbidden().error });
+  }
+
   await prisma.participant.update({
     where: { id: req.params.id },
     data: { isRevoked: true },
@@ -278,42 +329,17 @@ router.post('/chats/:id/join', async (req, res) => {
     return res.status(410).json({ error: 'Salon expiré' });
   }
 
-  const adminEmail = req.admin.email.toLowerCase();
-  const defaultName = (req.body?.displayName || 'Formateur').trim().slice(0, 64);
-  const displayName = defaultName.length >= 2 ? defaultName : 'Formateur';
-
-  let participant = await prisma.participant.findUnique({ where: { email: adminEmail } });
-  if (!participant) {
-    const accessCode = await generateUniqueAccessCode();
-    participant = await prisma.participant.create({
-      data: { email: adminEmail, accessCode },
-    });
-  }
-
-  await prisma.roomMembership.upsert({
-    where: {
-      participantId_chatRoomId: {
-        participantId: participant.id,
-        chatRoomId: chat.id,
-      },
-    },
-    create: {
-      participantId: participant.id,
-      chatRoomId: chat.id,
-      displayName,
-    },
-    update: { displayName },
-  });
+  const participant = await syncFormateurAllRooms(req.admin.email);
+  const displayName = participant.displayName || 'Formateur';
 
   const frontendUrl = process.env.FRONTEND_URL?.replace(/\/$/, '') || 'http://localhost:8081';
 
-  // Session participant (cookie) : le formateur entre dans le salon sans email+code
   issueParticipantSession(res, participant);
 
   res.json({
     roomId: chat.id,
     roomUrl: `${frontendUrl}/salon/${chat.id}`,
-    email: adminEmail,
+    email: req.admin.email.toLowerCase(),
     displayName,
   });
 });

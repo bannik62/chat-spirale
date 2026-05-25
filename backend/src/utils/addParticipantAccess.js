@@ -43,7 +43,11 @@ export async function addParticipantToRooms(email, chatRoomIds, options = {}) {
           chatRoomId,
         },
       },
-      create: { participantId: participant.id, chatRoomId },
+      create: {
+        participantId: participant.id,
+        chatRoomId,
+        ...(participant.displayName ? { displayName: participant.displayName } : {}),
+      },
       update: {},
     });
   }

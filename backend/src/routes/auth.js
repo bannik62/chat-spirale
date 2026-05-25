@@ -1,11 +1,13 @@
 import { Router } from 'express';
 import jwt from 'jsonwebtoken';
-import { SESSION_COOKIE, getParticipantFromCookie } from '../middleware/participantAuth.js';
+import { SESSION_COOKIE, participantAuth, getParticipantFromCookie } from '../middleware/participantAuth.js';
 import { issueParticipantSession } from '../utils/participantSession.js';
 import { verifyAdminCredentials, createAdminJwt, getAdminFromRequest } from '../utils/adminLogin.js';
 import { verifyParticipantCredentials } from '../utils/participantLogin.js';
 import { roomsForParticipant } from '../utils/roomsForParticipant.js';
 import { adminCookieOptions, sessionCookieOptions, loginRateLimiter } from '../middleware/security.js';
+import { prisma } from '../utils/prisma.js';
+import { isValidDisplayName, setParticipantDisplayName } from '../utils/displayName.js';
 
 const router = Router();
 
@@ -138,10 +140,30 @@ router.get('/me', async (req, res) => {
     if (payload.role !== 'participant') {
       return res.status(401).json({ error: 'Session invalide' });
     }
+    const participant = await prisma.participant.findUnique({
+      where: { id: payload.sub },
+    });
     const rooms = await roomsForParticipant(payload.sub);
-    res.json({ email: payload.email, rooms });
+    res.json({
+      email: payload.email,
+      displayName: participant?.displayName ?? null,
+      rooms,
+    });
   } catch {
     res.status(401).json({ error: 'Session expirée' });
+  }
+});
+
+router.post('/display-name', participantAuth, async (req, res) => {
+  const { displayName } = req.body ?? {};
+  if (!isValidDisplayName(displayName)) {
+    return res.status(400).json({ error: 'Nom invalide (min. 2 caractères)' });
+  }
+  try {
+    const name = await setParticipantDisplayName(req.participant.id, displayName);
+    res.json({ success: true, displayName: name });
+  } catch {
+    res.status(400).json({ error: 'Nom invalide (min. 2 caractères)' });
   }
 });
 

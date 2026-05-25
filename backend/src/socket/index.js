@@ -58,10 +58,10 @@ export function attachSocket(httpServer) {
             chatRoomId: roomId,
           },
         },
-        include: { chatRoom: true },
+        include: { chatRoom: true, participant: true },
       });
 
-      if (!membership?.displayName) {
+      if (!membership?.displayName && !membership?.participant?.displayName) {
         return next(new Error('Display name not set'));
       }
 
@@ -71,7 +71,10 @@ export function attachSocket(httpServer) {
         return next(new Error('expired'));
       }
 
-      socket.userName = membership.displayName;
+      const displayName =
+        membership.participant.displayName ?? membership.displayName;
+
+      socket.userName = displayName;
       socket.userEmail = payload.email;
       socket.chatRoomId = roomId;
       socket.participantId = payload.sub;

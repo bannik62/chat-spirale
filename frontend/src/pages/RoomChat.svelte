@@ -5,10 +5,7 @@
   import { logoutToLogin } from '../lib/logout.js';
   import { navigate } from '../lib/navigate.js';
   import ParticipantPicker from '../lib/ParticipantPicker.svelte';
-  import {
-    SetDisplayNameForm,
-    InviteInRoomForm,
-  } from '../lib/fields/index.js';
+  import { InviteInRoomForm } from '../lib/fields/index.js';
   import { touchForm } from '../lib/fields/reactive.js';
   import { logAction, logError } from '../lib/debugLog.js';
 
@@ -22,7 +19,10 @@
   let members = $state([]);
   let profile = $state(null);
   let showNamePrompt = $state(false);
-  let nameForm = $state(new SetDisplayNameForm());
+  let showEditName = $state(false);
+  let nameInput = $state('');
+  let nameError = $state('');
+  let savingName = $state(false);
   let messageText = $state('');
   let inviteForm = $state(new InviteInRoomForm());
   let tick = $state(0);
@@ -50,10 +50,18 @@
     tick++;
   }
 
-  let canSaveName = $derived.by(() => {
-    tick;
-    return nameForm.canSubmit;
-  });
+  let canSaveName = $derived(nameInput.trim().length >= 2);
+
+  function openEditName() {
+    nameInput = profile?.displayName || '';
+    nameError = '';
+    showEditName = true;
+  }
+
+  function closeEditName() {
+    showEditName = false;
+    nameError = '';
+  }
 
   let canSendMessage = $derived(messageText.trim().length > 0);
 
@@ -149,33 +157,43 @@
     logAction('RoomChat', 'loadProfile', { roomId: id });
     profile = await roomFetch(id, '/profile');
     if (!profile.displayName) {
+      nameInput = '';
       showNamePrompt = true;
+      showEditName = false;
       return false;
     }
     return true;
   }
 
   async function saveName() {
-    error = '';
-    const err = nameForm.firstError();
-    if (err) {
-      error = err;
-      logAction('RoomChat', 'saveName blocked', { error: err });
+    nameError = '';
+    const name = nameInput.trim();
+    if (name.length < 2) {
+      nameError = '2 caractères minimum';
+      logAction('RoomChat', 'saveName blocked', { error: nameError });
       return;
     }
-    logAction('RoomChat', 'saveName', nameForm.toJSON());
+    savingName = true;
+    logAction('RoomChat', 'saveName', { displayName: name });
     try {
-      await roomFetch(roomId, '/set-name', {
+      const res = await roomFetch(roomId, '/set-name', {
         method: 'POST',
-        body: JSON.stringify(nameForm.toJSON()),
+        body: JSON.stringify({ displayName: name }),
       });
       logAction('RoomChat', 'saveName success');
-      profile.displayName = nameForm.displayName.value;
+      profile = { ...profile, displayName: res.displayName };
       showNamePrompt = false;
+      showEditName = false;
+      const wasConnected = socket?.connected;
+      if (wasConnected) {
+        socket?.disconnect();
+      }
       await connectSocket();
     } catch (e) {
       logError('RoomChat', 'saveName', e);
-      error = e.message;
+      nameError = e.message;
+    } finally {
+      savingName = false;
     }
   }
 
@@ -388,17 +406,14 @@
         <h2>Bienvenue</h2>
         <p>Activité : <strong>{profile.chatRoom.name}</strong></p>
         <p class="muted">{profile.email}</p>
-        {#if error}<p class="err">{error}</p>{/if}
+        <p class="muted">Ce pseudo sera le même pour tous vos salons.</p>
+        {#if nameError}<p class="err">{nameError}</p>{/if}
         <label>
           Comment vous appelez-vous ?
-          <input
-            bind:value={nameForm.displayName.value}
-            placeholder="Prénom ou pseudo"
-            oninput={refreshUi}
-          />
+          <input bind:value={nameInput} placeholder="Prénom ou pseudo" maxlength="64" />
         </label>
-        <button onclick={saveName} disabled={!canSaveName}>
-          Entrer dans le groupe
+        <button type="button" onclick={saveName} disabled={!canSaveName || savingName}>
+          {savingName ? 'Enregistrement…' : 'Entrer dans le groupe'}
         </button>
       </div>
     </div>
@@ -407,7 +422,9 @@
       <div>
         <p class="room">{profile.chatRoom.name}</p>
         <p class="you">
-          {profile.displayName} · {profile.email}
+          {profile.displayName}
+          <button type="button" class="linkish" onclick={openEditName}>Modifier</button>
+          · {profile.email}
           {#if onlineLabel}
             <span class="online-dot"> · {onlineLabel}</span>
           {/if}
@@ -503,6 +520,26 @@
       />
       <button type="submit" disabled={!canSendMessage}>Envoyer</button>
     </form>
+
+    {#if showEditName}
+      <div class="modal-backdrop">
+        <div class="modal">
+          <h2>Modifier votre pseudo</h2>
+          <p class="muted">Utilisé dans tous vos salons.</p>
+          {#if nameError}<p class="err">{nameError}</p>{/if}
+          <label>
+            Pseudo
+            <input bind:value={nameInput} placeholder="Prénom ou pseudo" maxlength="64" />
+          </label>
+          <div class="modal-actions">
+            <button type="button" class="ghost-btn" onclick={closeEditName}>Annuler</button>
+            <button type="button" class="primary-btn" onclick={saveName} disabled={!canSaveName || savingName}>
+              {savingName ? 'Enregistrement…' : 'Enregistrer'}
+            </button>
+          </div>
+        </div>
+      </div>
+    {/if}
   {:else}
     <div class="center"><p class="muted">Chargement…</p></div>
   {/if}
@@ -537,6 +574,48 @@
     margin: 0.25rem 0 0;
     font-size: 0.85rem;
     color: var(--muted);
+  }
+
+  .linkish {
+    margin: 0 0.15rem;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--accent-hover);
+    font: inherit;
+    font-size: 0.8rem;
+    cursor: pointer;
+    text-decoration: underline;
+  }
+
+  .modal-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+  }
+
+  .ghost-btn {
+    padding: 0.75rem 1rem;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .primary-btn {
+    flex: 1;
+    padding: 0.75rem;
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .primary-btn:disabled {
+    opacity: 0.5;
   }
 
   .online-dot {
