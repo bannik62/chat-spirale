@@ -24,6 +24,7 @@ export function getAllowedOrigins() {
     origins.add('http://localhost:8081');
     origins.add('http://localhost:5174');
     origins.add('http://127.0.0.1:8081');
+    origins.add('http://127.0.0.1:5174');
   }
 
   return [...origins];

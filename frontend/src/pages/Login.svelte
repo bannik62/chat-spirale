@@ -1,32 +1,68 @@
 <script>
   import { onMount } from 'svelte';
   import { adminSessionFetch, sessionFetch, getAdminToken, setAdminToken } from '../lib/api.js';
-  import { PortalLoginForm } from '../lib/fields/index.js';
-  import { touchForm } from '../lib/fields/reactive.js';
   import { logAction, logError, logApi, logApiOk, logApiErr } from '../lib/debugLog.js';
 
-  let form = $state(new PortalLoginForm());
-  let tick = $state(0);
+  /** @type {'participant' | 'admin'} */
+  let mode = $state('participant');
+  let email = $state('');
+  let code = $state('');
+  let password = $state('');
   let error = $state('');
   let loading = $state(false);
   let checking = $state(true);
 
-  function refresh() {
-    tick++;
-  }
+  let isParticipant = $derived(mode === 'participant');
+  let isAdminMode = $derived(mode === 'admin');
 
   let canSubmit = $derived.by(() => {
-    tick;
-    return form.canSubmit;
+    const e = email.trim().toLowerCase();
+    if (!e.includes('@') || !e.includes('.')) return false;
+    if (mode === 'participant') {
+      const c = code.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+      return c.length >= 7;
+    }
+    return password.length > 0;
   });
+
+  function normalizeCode(raw) {
+    return String(raw).trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+  }
+
+  function buildPayload() {
+    const payload = {
+      email: email.trim().toLowerCase(),
+      mode,
+    };
+    if (mode === 'admin') {
+      return { ...payload, password };
+    }
+    return { ...payload, code: normalizeCode(code) };
+  }
+
+  function validationError() {
+    const e = email.trim().toLowerCase();
+    if (!e) return 'Email requis';
+    if (!e.includes('@') || !e.includes('.')) return 'Email invalide';
+    if (mode === 'participant') {
+      const c = normalizeCode(code);
+      if (!c) return 'Code requis';
+      if (c.length < 7) return 'Code à 8 caractères';
+    } else if (!password) {
+      return 'Mot de passe requis';
+    }
+    return null;
+  }
 
   onMount(async () => {
     logAction('Login', 'page mount');
     const params = new URLSearchParams(window.location.search);
-    if (params.get('mode') === 'admin') {
-      form.mode.value = 'admin';
-      form = touchForm(form);
-      logAction('Login', 'mode URL', { mode: 'admin' });
+    const urlMode = params.get('mode');
+    const stored = sessionStorage.getItem('spirale_login_mode');
+    if (urlMode === 'admin' || stored === 'admin') {
+      mode = 'admin';
+      sessionStorage.removeItem('spirale_login_mode');
+      logAction('Login', 'mode preset', { source: urlMode ? 'url' : 'session' });
     }
 
     try {
@@ -48,25 +84,25 @@
     checking = false;
   });
 
-  function setMode(mode) {
-    logAction('Login', 'change mode', { mode });
-    form.mode.value = mode;
-    form = touchForm(form);
-    refresh();
+  /** @param {'participant' | 'admin'} next */
+  function setMode(next) {
+    logAction('Login', 'change mode', { mode: next });
+    mode = next;
+    error = '';
   }
 
   async function submit() {
     error = '';
-    const err = form.firstError();
+    const err = validationError();
     if (err) {
       error = err;
       logAction('Login', 'submit blocked validation', { error: err });
       return;
     }
-    logAction('Login', 'submit', { mode: form.mode.value, email: form.email.value });
+    logAction('Login', 'submit', { mode, email: email.trim().toLowerCase() });
     loading = true;
     try {
-      const payload = form.toJSON();
+      const payload = buildPayload();
       logApi('POST', '/auth/portal-login', payload);
       const res = await fetch('/api/auth/portal-login', {
         method: 'POST',
@@ -110,14 +146,14 @@
       <div class="tabs">
         <button
           type="button"
-          class:active={form.mode.isParticipant}
+          class:active={isParticipant}
           onclick={() => setMode('participant')}
         >
           Participant
         </button>
         <button
           type="button"
-          class:active={form.mode.isAdmin}
+          class:active={isAdminMode}
           onclick={() => setMode('admin')}
         >
           Formateur
@@ -125,7 +161,7 @@
       </div>
 
       <p class="lead">
-        {#if form.mode.isParticipant}
+        {#if isParticipant}
           Votre email et le code reçu par l'association.
         {:else}
           Votre email et votre mot de passe formateur.
@@ -136,36 +172,38 @@
 
       <label>
         Email
-        <input type="email" bind:value={form.email.value} autocomplete="email" oninput={refresh} />
+        <input type="email" bind:value={email} autocomplete="email" />
       </label>
 
-      {#if form.mode.isParticipant}
+      {#if isParticipant}
         <label>
           Code d'accès
           <input
             class="code-input"
-            bind:value={form.code.value}
+            bind:value={code}
             maxlength="8"
             autocomplete="one-time-code"
             inputmode="text"
             autocapitalize="characters"
             placeholder="8 caractères"
-            oninput={refresh}
+            oninput={() => {
+              code = normalizeCode(code);
+            }}
           />
         </label>
       {:else}
         <label>
           Mot de passe
-          <input
-            type="password"
-            bind:value={form.password.value}
-            autocomplete="current-password"
-            oninput={refresh}
-          />
+          <input type="password" bind:value={password} autocomplete="current-password" />
         </label>
       {/if}
 
-      <button onclick={submit} disabled={loading || !canSubmit}>
+      <button
+        type="button"
+        class="submit-btn"
+        onclick={submit}
+        disabled={loading || !canSubmit}
+      >
         {loading ? 'Connexion…' : 'Se connecter'}
       </button>
     {/if}
@@ -217,6 +255,13 @@
     border-radius: 8px;
     color: var(--muted);
     font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+  }
+
+  .tabs button:hover:not(.active) {
+    border-color: var(--accent-hover);
+    color: var(--text);
   }
 
   .tabs button.active {
@@ -259,8 +304,7 @@
     text-align: center;
   }
 
-  button[type='button'].active,
-  .card > button:last-child {
+  .submit-btn {
     width: 100%;
     padding: 1rem;
     background: var(--accent);
@@ -270,10 +314,21 @@
     font-size: 1.1rem;
     font-weight: 600;
     margin-top: 0.25rem;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
   }
 
-  .card > button:last-child:disabled {
+  .submit-btn:hover:not(:disabled) {
+    background: var(--accent-hover);
+  }
+
+  .submit-btn:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+
+  .submit-btn:disabled {
     opacity: 0.5;
+    cursor: not-allowed;
   }
 
   .err {

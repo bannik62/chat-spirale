@@ -3,8 +3,7 @@
   import { adminFetch, adminSessionFetch, getAdminToken, setAdminToken } from '../lib/api.js';
   import { logoutToLogin } from '../lib/logout.js';
   import ParticipantPicker from '../lib/ParticipantPicker.svelte';
-  import { CreateChatForm, CreateParticipantForm, JoinChatForm } from '../lib/fields/index.js';
-  import { touchForm } from '../lib/fields/reactive.js';
+  import { JoinChatForm } from '../lib/fields/index.js';
   import { logAction, logError } from '../lib/debugLog.js';
 
   let isLoggedIn = $state(false);
@@ -14,11 +13,13 @@
   let success = $state('');
   let loading = $state(false);
 
-  let chatForm = $state(new CreateChatForm());
-  let participantForm = $state(new CreateParticipantForm());
+  let newChatName = $state('');
+  let newChatPermanent = $state(false);
+  /** @type {string[]} */
+  let createRoomIds = $state([]);
+  let sendInviteOnCreate = $state(true);
   let joinForm = $state(new JoinChatForm());
   let pickList = $state([]);
-  let tick = $state(0);
   let participantPicker = $state(null);
 
   let chats = $state([]);
@@ -103,23 +104,28 @@
     }
   }
 
-  function refreshUi() {
-    tick++;
-  }
-
   let canCreateParticipant = $derived.by(() => {
-    tick;
-    pickList;
-    participantForm.roomIds.ids;
     const pending = participantPicker?.getPendingEmail?.() ?? null;
     const hasEmails = pickList.length > 0 || !!pending;
-    return hasEmails && participantForm.roomIds.isValid;
+    return hasEmails && createRoomIds.length > 0;
   });
 
-  let canCreateChat = $derived.by(() => {
-    tick;
-    return chatForm.name.isValid;
-  });
+  let canCreateChat = $derived(newChatName.trim().length >= 2);
+
+  function toggleCreateRoom(chatId) {
+    createRoomIds = createRoomIds.includes(chatId)
+      ? createRoomIds.filter((x) => x !== chatId)
+      : [...createRoomIds, chatId];
+    logAction('Admin', 'toggleCreateRoom', { chatId, createRoomIds });
+  }
+
+  function participantPayload(email, alreadyRegistered) {
+    return {
+      email: email.trim().toLowerCase(),
+      chatRoomIds: [...createRoomIds],
+      sendEmail: !alreadyRegistered || sendInviteOnCreate,
+    };
+  }
 
   async function refresh() {
     logAction('Admin', 'refresh lists');
@@ -127,16 +133,16 @@
     participants = await adminFetch('/participants');
     logAction('Admin', 'refresh done', { chats: chats.length, participants: participants.length });
     syncRoomEdits();
-    participantForm.roomIds.setDefault(chats.map((c) => c.id));
-    participantForm = touchForm(participantForm);
-    refreshUi();
+    if (createRoomIds.length === 0 && chats.length > 0) {
+      createRoomIds = [chats[0].id];
+    }
   }
 
   async function handleCreateParticipantClick() {
     logAction('Admin', 'createParticipant click', {
       pickListLen: pickList.length,
       pendingEmail: participantPicker?.getPendingEmail?.() ?? null,
-      roomIds: participantForm.roomIds.ids,
+      roomIds: createRoomIds,
       canSubmit: canCreateParticipant,
       loading,
     });
@@ -145,29 +151,23 @@
 
   async function handleCreateChatClick() {
     logAction('Admin', 'createChat click', {
-      name: chatForm.name.value,
+      name: newChatName,
       canSubmit: canCreateChat,
       loading,
     });
     await createChat();
   }
 
-  function onInviteMailChange(e) {
-    participantForm.sendInviteEmail.checked = e.currentTarget.checked;
-    participantForm = touchForm(participantForm);
-    refreshUi();
-  }
-
   async function createChat() {
     error = '';
     success = '';
-    const err = chatForm.firstError();
-    if (err) {
-      error = err;
-      logAction('Admin', 'createChat blocked', { error: err });
+    const name = newChatName.trim();
+    if (name.length < 2) {
+      error = 'Nom trop court (2 caractères minimum)';
+      logAction('Admin', 'createChat blocked', { error });
       return;
     }
-    const payload = chatForm.toJSON();
+    const payload = { name, isPermanent: newChatPermanent };
     logAction('Admin', 'createChat', payload);
     loading = true;
     try {
@@ -177,8 +177,8 @@
       });
       logAction('Admin', 'createChat success', { name: payload.name });
       success = 'Salon créé';
-      chatForm.reset();
-      chatForm = touchForm(chatForm);
+      newChatName = '';
+      newChatPermanent = false;
       await refresh();
     } catch (e) {
       logError('Admin', 'createChat', e);
@@ -195,30 +195,35 @@
 
     participantPicker?.flushPendingEmail?.();
 
-    participantForm.emails.clear();
-    for (const email of pickList) {
-      participantForm.emails.add(email);
+    const pending = participantPicker?.getPendingEmail?.() ?? null;
+    const emails = [...pickList];
+    if (pending && !emails.includes(pending)) {
+      emails.push(pending);
     }
 
-    const err = participantForm.firstError();
-    if (err) {
-      error = err;
-      logAction('Admin', 'createParticipant blocked', { error: err });
+    if (emails.length === 0) {
+      error = 'Au moins un email requis';
+      logAction('Admin', 'createParticipant blocked', { error });
+      return;
+    }
+    if (createRoomIds.length === 0) {
+      error = 'Au moins un salon requis';
+      logAction('Admin', 'createParticipant blocked', { error });
       return;
     }
 
     logAction('Admin', 'createParticipant', {
-      emails: pickList,
-      roomIds: participantForm.roomIds.ids,
-      sendInviteEmail: participantForm.sendInviteEmail.checked,
+      emails,
+      roomIds: createRoomIds,
+      sendInviteEmail: sendInviteOnCreate,
     });
     loading = true;
     const summaries = [];
     try {
-      for (const email of pickList) {
-        const normalized = email;
+      for (const email of emails) {
+        const normalized = email.trim().toLowerCase();
         const alreadyRegistered = participants.some((p) => p.email === normalized);
-        const payload = participantForm.payloadForEmail(email, { alreadyRegistered });
+        const payload = participantPayload(normalized, alreadyRegistered);
 
         const res = await adminFetch('/participants', {
           method: 'POST',
@@ -238,8 +243,6 @@
       }
       success = summaries.join(' · ');
       pickList = [];
-      participantForm.emails.clear();
-      participantForm = touchForm(participantForm);
       await refresh();
     } catch (e) {
       logError('Admin', 'createParticipant', e);
@@ -247,13 +250,6 @@
     } finally {
       loading = false;
     }
-  }
-
-  function toggleRoom(id) {
-    logAction('Admin', 'toggleRoom', { roomId: id });
-    participantForm.roomIds.toggle(id);
-    participantForm = touchForm(participantForm);
-    refreshUi();
   }
 
   async function joinChat(id) {
@@ -358,7 +354,8 @@
         setAdminToken(null);
       }
     }
-    location.replace('/?mode=admin');
+    sessionStorage.setItem('spirale_login_mode', 'admin');
+    location.replace('/');
   });
 
   function setTab(next) {
@@ -390,25 +387,13 @@
         <h2>Nouveau salon</h2>
         <label>
           Nom de l'activité
-          <input
-            bind:value={chatForm.name.value}
-            placeholder="Atelier janvier"
-            oninput={refreshUi}
-          />
+          <input bind:value={newChatName} placeholder="Atelier janvier" />
         </label>
         <label class="row">
-          <input
-            type="checkbox"
-            checked={chatForm.isPermanent.checked}
-            onchange={(e) => {
-              chatForm.isPermanent.checked = e.currentTarget.checked;
-              chatForm = touchForm(chatForm);
-              refreshUi();
-            }}
-          />
+          <input type="checkbox" bind:checked={newChatPermanent} />
           Permanent (pas de suppression auto vendredi)
         </label>
-        <button onclick={handleCreateChatClick} disabled={loading || !canCreateChat}>
+        <button type="button" onclick={handleCreateChatClick} disabled={loading || !canCreateChat}>
           Créer le salon
         </button>
       </section>
@@ -504,14 +489,9 @@
           bind:this={participantPicker}
           allParticipants={participants}
           bind:pickList
-          onSelectionChange={refreshUi}
         />
         <label class="row invite-mail-row">
-          <input
-            type="checkbox"
-            checked={participantForm.sendInviteEmail.checked}
-            onchange={onInviteMailChange}
-          />
+          <input type="checkbox" bind:checked={sendInviteOnCreate} />
           Envoyer l'email avec le code (nouvelle personne uniquement par défaut)
         </label>
         <fieldset>
@@ -520,21 +500,21 @@
             <label class="row">
               <input
                 type="checkbox"
-                checked={participantForm.roomIds.includes(chat.id)}
-                onchange={() => toggleRoom(chat.id)}
+                checked={createRoomIds.includes(chat.id)}
+                onchange={() => toggleCreateRoom(chat.id)}
               />
               {chat.name}
             </label>
           {/each}
         </fieldset>
-        <button onclick={handleCreateParticipantClick} disabled={loading || !canCreateParticipant}>
+        <button type="button" onclick={handleCreateParticipantClick} disabled={loading || !canCreateParticipant}>
           {loading ? 'Enregistrement…' : "Enregistrer l'accès"}
         </button>
         {#if !canCreateParticipant && !loading}
           <p class="form-hint muted">
             {#if pickList.length === 0 && !participantPicker?.getPendingEmail?.()}
               Saisissez un email (puis Entrée ou ce bouton).
-            {:else if !participantForm.roomIds.isValid}
+            {:else if createRoomIds.length === 0}
               Cochez au moins un salon.
             {/if}
           </p>

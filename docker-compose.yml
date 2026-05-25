@@ -20,6 +20,7 @@ services:
     ports:
       - '3002:3000'  # 3002 hôte : 3000 déjà pris par codeurbase sur ta machine
     environment:
+      NODE_ENV: development
       DATABASE_URL: postgresql://spirale:spirale@postgres:5432/spirale
       JWT_SECRET: dev-secret-change-me
       ADMIN_EMAIL: admin@spirale.local
