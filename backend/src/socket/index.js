@@ -4,6 +4,17 @@ import cookie from 'cookie';
 import { prisma } from '../utils/prisma.js';
 import { SESSION_COOKIE } from '../middleware/participantAuth.js';
 import { getAllowedOrigins } from '../middleware/security.js';
+import {
+  joinRoom,
+  leaveRoom,
+  setTyping,
+  setLastRead,
+  roomSnapshot,
+} from './roomPresence.js';
+
+function emitRoomState(io, roomId) {
+  io.to(roomId).emit('room-state', roomSnapshot(roomId));
+}
 
 export function attachSocket(httpServer) {
   const io = new Server(httpServer, {
@@ -71,15 +82,44 @@ export function attachSocket(httpServer) {
   });
 
   io.on('connection', (socket) => {
-    socket.join(socket.chatRoomId);
+    const { chatRoomId, participantId, userName, userEmail } = socket;
 
-    socket.to(socket.chatRoomId).emit('system-message', {
+    joinRoom(chatRoomId, participantId, { userName, userEmail });
+    socket.join(chatRoomId);
+    emitRoomState(io, chatRoomId);
+
+    socket.to(chatRoomId).emit('system-message', {
       type: 'user-joined',
-      content: `${socket.userName} a rejoint le chat`,
+      content: `${userName} a rejoint le chat`,
       at: new Date().toISOString(),
     });
 
+    socket.on('typing', (data) => {
+      setTyping(chatRoomId, participantId, !!data?.typing);
+      emitRoomState(io, chatRoomId);
+    });
+
+    socket.on('mark-read', (data) => {
+      const readAt = data?.readAt ? new Date(data.readAt) : new Date();
+      if (Number.isNaN(readAt.getTime())) return;
+      setLastRead(chatRoomId, participantId, readAt);
+      socket.to(chatRoomId).emit('read-update', {
+        participantId,
+        userName,
+        email: userEmail,
+        readAt: readAt.toISOString(),
+      });
+      socket.emit('read-update', {
+        participantId,
+        userName,
+        email: userEmail,
+        readAt: readAt.toISOString(),
+      });
+    });
+
     socket.on('message', async (data) => {
+      setTyping(chatRoomId, participantId, false);
+
       const content = String(data?.content || '').trim();
       if (!content || content.length > 4000) return;
 
@@ -92,19 +132,23 @@ export function attachSocket(httpServer) {
         },
       });
 
-      io.to(socket.chatRoomId).emit('message', {
+      io.to(chatRoomId).emit('message', {
         id: message.id,
         content: message.content,
         senderName: message.senderName,
         senderEmail: message.senderEmail,
         createdAt: message.createdAt,
       });
+      emitRoomState(io, chatRoomId);
     });
 
     socket.on('disconnect', () => {
-      socket.to(socket.chatRoomId).emit('system-message', {
+      leaveRoom(chatRoomId, participantId);
+      emitRoomState(io, chatRoomId);
+
+      socket.to(chatRoomId).emit('system-message', {
         type: 'user-left',
-        content: `${socket.userName} s'est déconnecté(e)`,
+        content: `${userName} s'est déconnecté(e)`,
         at: new Date().toISOString(),
       });
     });

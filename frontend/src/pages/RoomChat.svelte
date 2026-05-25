@@ -7,7 +7,6 @@
   import ParticipantPicker from '../lib/ParticipantPicker.svelte';
   import {
     SetDisplayNameForm,
-    MessageContentField,
     InviteInRoomForm,
   } from '../lib/fields/index.js';
   import { touchForm } from '../lib/fields/reactive.js';
@@ -24,15 +23,28 @@
   let profile = $state(null);
   let showNamePrompt = $state(false);
   let nameForm = $state(new SetDisplayNameForm());
-  let messageField = $state(new MessageContentField());
+  let messageText = $state('');
   let inviteForm = $state(new InviteInRoomForm());
   let tick = $state(0);
 
   let messages = $state([]);
   let systemLines = $state([]);
+  /** @type {{ email: string, userName: string }[]} */
+  let onlineUsers = $state([]);
+  /** @type {Record<string, string>} */
+  let readAtByEmail = $state({});
+  /** @type {string[]} */
+  let typers = $state([]);
   let error = $state('');
   let socket = $state(null);
   let listEl = $state(null);
+
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let typingTimer = null;
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let markReadTimer = null;
+
+  const MAX_MESSAGE_LEN = 4000;
 
   function refreshUi() {
     tick++;
@@ -43,10 +55,83 @@
     return nameForm.canSubmit;
   });
 
-  let canSendMessage = $derived.by(() => {
-    tick;
-    return messageField.isValid;
+  let canSendMessage = $derived(messageText.trim().length > 0);
+
+  let typingLabel = $derived.by(() => {
+    const others = typers.filter((n) => n !== profile?.displayName);
+    if (others.length === 0) return '';
+    if (others.length === 1) return `${others[0]} est en train d'écrire…`;
+    return `${others.join(', ')} sont en train d'écrire…`;
   });
+
+  let onlineLabel = $derived.by(() => {
+    if (onlineUsers.length <= 1) return '';
+    return `${onlineUsers.length} en ligne`;
+  });
+
+  function applyRoomState(state) {
+    onlineUsers = (state?.online || []).map((o) => ({
+      email: o.email,
+      userName: o.userName,
+    }));
+    const nextTypers = (state?.typers || []).filter((n) => n !== profile?.displayName);
+    typers = nextTypers;
+    const nextReads = { ...readAtByEmail };
+    for (const r of state?.reads || []) {
+      if (r.email && r.readAt) nextReads[r.email] = r.readAt;
+    }
+    readAtByEmail = nextReads;
+  }
+
+  /** @param {{ email?: string, readAt?: string }} data */
+  function applyReadUpdate(data) {
+    if (data?.email && data?.readAt) {
+      readAtByEmail = { ...readAtByEmail, [data.email]: data.readAt };
+    }
+  }
+
+  function isNearBottom() {
+    if (!listEl) return true;
+    return listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight < 48;
+  }
+
+  function scheduleMarkRead() {
+    clearTimeout(markReadTimer);
+    markReadTimer = setTimeout(() => {
+      if (!socket?.connected || messages.length === 0 || !isNearBottom()) return;
+      const last = messages[messages.length - 1];
+      socket.emit('mark-read', { messageId: last.id, readAt: new Date().toISOString() });
+    }, 400);
+  }
+
+  function onMessageInput() {
+    if (messageText.length > MAX_MESSAGE_LEN) {
+      messageText = messageText.slice(0, MAX_MESSAGE_LEN);
+    }
+    if (!socket?.connected) return;
+    socket.emit('typing', { typing: true });
+    clearTimeout(typingTimer);
+    typingTimer = setTimeout(() => socket?.emit('typing', { typing: false }), 2000);
+  }
+
+  /** @param {{ senderEmail: string, createdAt: string }} msg */
+  function readLabel(msg) {
+    if (!profile || msg.senderEmail !== profile.email) return '';
+    const others = onlineUsers.filter((u) => u.email !== profile.email);
+    if (others.length === 0) return '';
+    const msgTs = new Date(msg.createdAt).getTime();
+    const seen = others.filter((u) => {
+      const readAt = readAtByEmail[u.email];
+      return readAt && new Date(readAt).getTime() >= msgTs;
+    });
+    if (seen.length === 0) return '';
+    if (seen.length === others.length) return 'Vu';
+    return `Vu par ${seen.map((u) => u.userName).join(', ')}`;
+  }
+
+  function onMessagesScroll() {
+    if (isNearBottom()) scheduleMarkRead();
+  }
 
   let canAddParticipants = $derived.by(() => {
     tick;
@@ -188,6 +273,15 @@
       logAction('RoomChat', 'socket message received', { id: msg.id, sender: msg.senderName });
       messages = [...messages, msg];
       scrollBottom();
+      scheduleMarkRead();
+    });
+
+    socket.on('room-state', (state) => {
+      applyRoomState(state);
+    });
+
+    socket.on('read-update', (data) => {
+      applyReadUpdate(data);
     });
 
     socket.on('system-message', (ev) => {
@@ -202,22 +296,24 @@
 
     socket.on('connect', () => {
       logAction('RoomChat', 'socket connected');
+      scheduleMarkRead();
     });
   }
 
   function sendMessage() {
-    if (!messageField.isValid || !socket?.connected) {
+    const content = messageText.trim();
+    if (!content || !socket?.connected) {
       logAction('RoomChat', 'sendMessage blocked', {
-        valid: messageField.isValid,
+        empty: !content,
         connected: socket?.connected,
       });
       return;
     }
-    logAction('RoomChat', 'sendMessage', { length: messageField.value.length });
-    socket.emit('message', messageField.toSocketPayload());
-    messageField.reset();
-    messageField = touchForm(messageField);
-    refreshUi();
+    logAction('RoomChat', 'sendMessage', { length: content.length });
+    clearTimeout(typingTimer);
+    socket.emit('typing', { typing: false });
+    socket.emit('message', { content });
+    messageText = '';
   }
 
   function scrollBottom() {
@@ -267,11 +363,16 @@
         }
       });
 
-    return () => socket?.disconnect();
+    return () => {
+      clearTimeout(typingTimer);
+      clearTimeout(markReadTimer);
+      socket?.disconnect();
+    };
   });
 
   $effect(() => {
     if (messages.length) scrollBottom();
+    if (messages.length && profile) scheduleMarkRead();
   });
 </script>
 
@@ -305,7 +406,12 @@
     <header>
       <div>
         <p class="room">{profile.chatRoom.name}</p>
-        <p class="you">{profile.displayName} · {profile.email}</p>
+        <p class="you">
+          {profile.displayName} · {profile.email}
+          {#if onlineLabel}
+            <span class="online-dot"> · {onlineLabel}</span>
+          {/if}
+        </p>
       </div>
       <div class="header-actions">
         {#if isAdmin}
@@ -360,18 +466,27 @@
       </section>
     {/if}
 
-    <div class="messages" bind:this={listEl}>
+    <div class="messages" bind:this={listEl} onscroll={onMessagesScroll}>
       {#each messages as msg}
-        <div class="msg">
+        <div class="msg" class:mine={msg.senderEmail === profile.email}>
           <span class="author">{msg.senderName}</span>
           <span class="body">{msg.content}</span>
-          <time>{new Date(msg.createdAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</time>
+          <div class="msg-meta">
+            <time>{new Date(msg.createdAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</time>
+            {#if readLabel(msg)}
+              <span class="read-status">{readLabel(msg)}</span>
+            {/if}
+          </div>
         </div>
       {/each}
       {#each systemLines as line}
         <p class="system">{line.content}</p>
       {/each}
     </div>
+
+    {#if typingLabel}
+      <p class="typing-indicator">{typingLabel}</p>
+    {/if}
 
     <form
       class="composer"
@@ -381,10 +496,10 @@
       }}
     >
       <input
-        bind:value={messageField.value}
+        bind:value={messageText}
         placeholder="Votre message…"
         autocomplete="off"
-        oninput={refreshUi}
+        oninput={onMessageInput}
       />
       <button type="submit" disabled={!canSendMessage}>Envoyer</button>
     </form>
@@ -422,6 +537,20 @@
     margin: 0.25rem 0 0;
     font-size: 0.85rem;
     color: var(--muted);
+  }
+
+  .online-dot {
+    color: var(--success);
+  }
+
+  .typing-indicator {
+    margin: 0;
+    padding: 0.35rem 1.25rem;
+    font-size: 0.8rem;
+    font-style: italic;
+    color: var(--muted);
+    background: var(--surface);
+    border-top: 1px solid var(--border);
   }
 
   .header-actions {
@@ -529,6 +658,23 @@
     max-width: 85%;
   }
 
+  .msg.mine {
+    margin-left: auto;
+    border-color: rgba(107, 76, 230, 0.35);
+  }
+
+  .msg-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.35rem;
+  }
+
+  .read-status {
+    font-size: 0.72rem;
+    color: var(--success);
+  }
+
   .author {
     display: block;
     font-weight: 600;
@@ -546,7 +692,6 @@
     display: block;
     font-size: 0.75rem;
     color: var(--muted);
-    margin-top: 0.35rem;
   }
 
   .system {

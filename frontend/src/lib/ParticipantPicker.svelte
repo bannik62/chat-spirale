@@ -8,12 +8,14 @@
    *   allParticipants: Array<{ id: string, email: string, accessCode?: string, rooms?: Array<{name:string}> }>,
    *   pickList: string[],
    *   roomMemberEmails?: string[],
+   *   newEmailsOnly?: boolean,
    * }}
    */
   let {
     allParticipants = [],
     pickList = $bindable([]),
     roomMemberEmails = [],
+    newEmailsOnly = false,
     onSelectionChange = () => {},
   } = $props();
 
@@ -21,6 +23,11 @@
   let emailList = $state(new EmailListField(pickList));
   let dropdownOpen = $state(false);
   let inputEl = $state(null);
+
+  function isKnownParticipant(email) {
+    const n = email.trim().toLowerCase();
+    return allParticipants.some((p) => p.email === n);
+  }
 
   function syncOut() {
     pickList = emailList.toJSON();
@@ -41,6 +48,7 @@
   export function flushPendingEmail() {
     const candidate = searchField.candidateEmail;
     if (!candidate) return false;
+    if (newEmailsOnly && isKnownParticipant(candidate)) return false;
     if (emailList.includes(candidate)) {
       searchField.reset();
       searchField = touchForm(searchField);
@@ -69,6 +77,7 @@
   });
 
   let filtered = $derived.by(() => {
+    if (newEmailsOnly) return [];
     const q = searchField.value.toLowerCase();
     if (!q) {
       return allParticipants
@@ -93,7 +102,14 @@
     return !exists && !emailList.includes(candidate);
   });
 
+  let emailAlreadyRegistered = $derived.by(() => {
+    if (!newEmailsOnly) return false;
+    const candidate = searchField.candidateEmail;
+    return !!candidate && isKnownParticipant(candidate);
+  });
+
   function addEmail(email) {
+    if (newEmailsOnly && isKnownParticipant(email)) return;
     if (emailList.add(email)) {
       logAction('ParticipantPicker', 'addEmail', { email });
       searchField.reset();
@@ -111,7 +127,7 @@
 
   function onInputFocus() {
     logAction('ParticipantPicker', 'search focus');
-    dropdownOpen = true;
+    if (!newEmailsOnly) dropdownOpen = true;
   }
 
   function onInputBlur() {
@@ -125,7 +141,7 @@
     if (e.key === 'Enter') {
       e.preventDefault();
       if (canAddNewEmail) addEmail(searchField.value);
-      else if (filtered.length === 1) addEmail(filtered[0].email);
+      else if (!newEmailsOnly && filtered.length === 1) addEmail(filtered[0].email);
     }
     if (e.key === 'Escape') {
       logAction('ParticipantPicker', 'search escape');
@@ -140,12 +156,12 @@
 
 <div class="picker">
   <label class="search-label">
-    Rechercher ou saisir un email
+    {newEmailsOnly ? 'Email de la nouvelle personne' : 'Rechercher ou saisir un email'}
     <input
       bind:this={inputEl}
-      type="search"
+      type={newEmailsOnly ? 'email' : 'search'}
       bind:value={searchField.value}
-      placeholder="Nom, email…"
+      placeholder={newEmailsOnly ? 'email@exemple.com' : 'Nom, email…'}
       autocomplete="off"
       onfocus={onInputFocus}
       onblur={onInputBlur}
@@ -154,7 +170,7 @@
     />
   </label>
 
-  {#if dropdownOpen && (filtered.length > 0 || canAddNewEmail)}
+  {#if !newEmailsOnly && dropdownOpen && (filtered.length > 0 || canAddNewEmail)}
     <ul class="dropdown" role="listbox">
       {#if canAddNewEmail}
         <li>
@@ -181,7 +197,11 @@
     </ul>
   {/if}
 
-  {#if emailList.length > 0}
+  {#if emailAlreadyRegistered}
+    <p class="hint rejected">
+      Cette personne est déjà inscrite — cochez ses salons dans « Personnes inscrites » ou utilisez « + Inviter » dans le chat.
+    </p>
+  {:else if emailList.length > 0}
     <div class="chips">
       {#each emailList.items as email}
         <span class="chip">
@@ -196,6 +216,8 @@
     <p class="hint pending">
       Email saisi : appuyez sur <strong>Entrée</strong> ou cliquez « Enregistrer l'accès » pour confirmer.
     </p>
+  {:else if newEmailsOnly}
+    <p class="hint">Nouvelle personne uniquement — email pas encore inscrit dans l'association.</p>
   {:else}
     <p class="hint">Choisissez dans la liste ou tapez un email puis Entrée.</p>
   {/if}
@@ -327,6 +349,10 @@
 
   .hint.pending {
     color: var(--accent-hover);
+  }
+
+  .hint.rejected {
+    color: var(--danger);
   }
 
   .hint {

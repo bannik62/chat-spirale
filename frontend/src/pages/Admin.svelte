@@ -104,10 +104,18 @@
     }
   }
 
+  function isKnownParticipantEmail(email) {
+    const n = email.trim().toLowerCase();
+    return participants.some((p) => p.email === n);
+  }
+
   let canCreateParticipant = $derived.by(() => {
     const pending = participantPicker?.getPendingEmail?.() ?? null;
-    const hasEmails = pickList.length > 0 || !!pending;
-    return hasEmails && createRoomIds.length > 0;
+    if (createRoomIds.length === 0) return false;
+    const emails = [...pickList];
+    if (pending) emails.push(pending);
+    if (emails.length === 0) return false;
+    return emails.every((e) => !isKnownParticipantEmail(e));
   });
 
   let canCreateChat = $derived(newChatName.trim().length >= 2);
@@ -212,6 +220,13 @@
       return;
     }
 
+    const existing = emails.filter((e) => isKnownParticipantEmail(e));
+    if (existing.length > 0) {
+      error = `Déjà inscrite(s) : ${existing.join(', ')} — cochez ses salons dans la liste ci-dessus.`;
+      logAction('Admin', 'createParticipant blocked', { error, existing });
+      return;
+    }
+
     logAction('Admin', 'createParticipant', {
       emails,
       roomIds: createRoomIds,
@@ -222,8 +237,7 @@
     try {
       for (const email of emails) {
         const normalized = email.trim().toLowerCase();
-        const alreadyRegistered = participants.some((p) => p.email === normalized);
-        const payload = participantPayload(normalized, alreadyRegistered);
+        const payload = participantPayload(normalized, false);
 
         const res = await adminFetch('/participants', {
           method: 'POST',
@@ -235,11 +249,7 @@
           mail: res.mail,
         });
         lastCreatedCode = res.accessCode;
-        if (res.merged) {
-          summaries.push(`${res.email} : salons ajoutés (code ${res.accessCode})`);
-        } else {
-          summaries.push(`${res.email} : nouveau, code ${res.accessCode}`);
-        }
+        summaries.push(`${res.email} : nouveau, code ${res.accessCode}`);
       }
       success = summaries.join(' · ');
       pickList = [];
@@ -480,19 +490,20 @@
       </section>
 
       <details class="card add-person-details">
-        <summary>Ajouter une personne (optionnel — multi-salons)</summary>
+        <summary>Ajouter une nouvelle personne</summary>
         <p class="muted">
-          Alternative à « + Inviter » dans un chat. Personne déjà inscrite : <strong>même code</strong>,
-          pas d'email automatique (utilisez « Renvoyer mail » ci-dessus si besoin).
+          Uniquement pour quelqu'un qui n'est pas encore inscrit. Personne déjà dans la liste :
+          cochez ses salons ci-dessus, ou « + Inviter » depuis un chat.
         </p>
         <ParticipantPicker
           bind:this={participantPicker}
           allParticipants={participants}
           bind:pickList
+          newEmailsOnly
         />
         <label class="row invite-mail-row">
           <input type="checkbox" bind:checked={sendInviteOnCreate} />
-          Envoyer l'email avec le code (nouvelle personne uniquement par défaut)
+          Envoyer l'email avec le code
         </label>
         <fieldset>
           <legend>Salons autorisés</legend>
@@ -513,9 +524,11 @@
         {#if !canCreateParticipant && !loading}
           <p class="form-hint muted">
             {#if pickList.length === 0 && !participantPicker?.getPendingEmail?.()}
-              Saisissez un email (puis Entrée ou ce bouton).
+              Saisissez l'email d'une nouvelle personne (Entrée ou ce bouton).
             {:else if createRoomIds.length === 0}
               Cochez au moins un salon.
+            {:else}
+              Cette personne est déjà inscrite — modifiez ses salons dans la liste ci-dessus.
             {/if}
           </p>
         {/if}

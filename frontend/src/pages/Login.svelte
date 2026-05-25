@@ -8,6 +8,7 @@
   let email = $state('');
   let code = $state('');
   let password = $state('');
+  let showPassword = $state(false);
   let error = $state('');
   let loading = $state(false);
   let checking = $state(true);
@@ -89,6 +90,11 @@
     logAction('Login', 'change mode', { mode: next });
     mode = next;
     error = '';
+    showPassword = false;
+  }
+
+  function togglePasswordVisibility() {
+    showPassword = !showPassword;
   }
 
   async function submit() {
@@ -194,7 +200,34 @@
       {:else}
         <label>
           Mot de passe
-          <input type="password" bind:value={password} autocomplete="current-password" />
+          <span class="password-wrap">
+            <input
+              type={showPassword ? 'text' : 'password'}
+              bind:value={password}
+              autocomplete="current-password"
+            />
+            <button
+              type="button"
+              class="password-toggle"
+              onclick={togglePasswordVisibility}
+              aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+              aria-pressed={showPassword}
+            >
+              {#if showPassword}
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+                  <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+                  <path d="M1 1l22 22" />
+                  <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
+                </svg>
+              {:else}
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                  <circle cx="12" cy="12" r="3" />
+                </svg>
+              {/if}
+            </button>
+          </span>
         </label>
       {/if}
 
@@ -294,6 +327,44 @@
     border: 2px solid var(--border);
     border-radius: 8px;
     color: var(--text);
+  }
+
+  .password-wrap {
+    display: block;
+    position: relative;
+    margin-top: 0.5rem;
+  }
+
+  .password-wrap input {
+    margin-top: 0;
+    padding-right: 3rem;
+  }
+
+  .password-toggle {
+    position: absolute;
+    right: 0.65rem;
+    top: 50%;
+    transform: translateY(-50%);
+    display: grid;
+    place-items: center;
+    width: 2.25rem;
+    height: 2.25rem;
+    padding: 0;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+  }
+
+  .password-toggle:hover {
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+  .password-toggle:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
 
   .code-input {
